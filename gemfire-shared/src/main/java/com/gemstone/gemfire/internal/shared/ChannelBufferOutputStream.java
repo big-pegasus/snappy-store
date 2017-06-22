@@ -48,6 +48,10 @@ public class ChannelBufferOutputStream extends OutputStreamChannel {
   public ChannelBufferOutputStream(WritableByteChannel channel, int bufferSize)
       throws IOException {
     super(channel);
+    if (bufferSize < 32) {
+      throw new IllegalArgumentException("buffer size " + bufferSize +
+          " should be at least 32");
+    }
     this.buffer = allocateBuffer(bufferSize);
   }
 
@@ -101,6 +105,18 @@ public class ChannelBufferOutputStream extends OutputStreamChannel {
   @Override
   public final int write(ByteBuffer src) throws IOException {
     return super.writeBuffered(src, this.buffer);
+  }
+
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public final void writeInt(int v) throws IOException {
+    if (this.buffer.remaining() < 4) {
+      flushBufferBlocking(this.buffer);
+    }
+    // ByteBuffer will always be big-endian
+    this.buffer.putInt(v);
   }
 
   /**

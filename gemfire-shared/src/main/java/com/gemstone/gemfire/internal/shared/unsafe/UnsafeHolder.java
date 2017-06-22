@@ -319,7 +319,13 @@ public abstract class UnsafeHolder {
   }
 
   static void releaseDirectBuffer(ByteBuffer buffer) {
-    sun.misc.Cleaner cleaner = ((sun.nio.ch.DirectBuffer)buffer).cleaner();
+    sun.nio.ch.DirectBuffer directBuffer = (sun.nio.ch.DirectBuffer)buffer;
+    sun.misc.Cleaner cleaner = directBuffer.cleaner();
+    Object attachment;
+    if (cleaner == null &&
+        (attachment = directBuffer.attachment()) instanceof sun.nio.ch.DirectBuffer) {
+      cleaner = ((sun.nio.ch.DirectBuffer)attachment).cleaner();
+    }
     if (cleaner != null) {
       cleaner.clean();
       cleaner.clear();
