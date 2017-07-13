@@ -65,6 +65,7 @@ if ((rootProject.name.contains('native') && !rootProject.hasProperty('skipNative
       flavour = out.toString().replaceAll('[\r\n\f]', '').toLowerCase()
     }
     if (flavour.startsWith('ubuntu14') || flavour.startsWith('ubuntu16') ||
+        flavour.startsWith('elementary') ||
         flavour.startsWith('linuxmint17') || flavour.startsWith('linuxmint18')) {
       dependencies += [ "thrift-${thriftVersion}-ubuntu14.04.tar.bz2",
                         "boost-${boostVersion}-ubuntu14.04.tar.bz2",
