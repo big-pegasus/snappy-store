@@ -595,7 +595,7 @@ public class SnapShotTxDUnit extends DistributedSQLTestBase {
           }
         };
         Thread[] tarr = new Thread[10];
-        for (int i = 1; i < 10; i++) {
+        for (int i = 0; i < 10; i++) {
           Thread t = new Thread(run);
           t.start();
           tarr[i] = t;
