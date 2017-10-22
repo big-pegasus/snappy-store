@@ -2044,7 +2044,7 @@ public final class GemFireStore implements AccessFactory, ModuleControl,
       }
     });
     try {
-      stopper.join(5000L);
+      stopper.join(3000L);
       if (stopper.isAlive()) {
         // interrupt the stopper
         stopper.interrupt();

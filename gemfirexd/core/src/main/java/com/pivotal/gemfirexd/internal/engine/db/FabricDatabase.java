@@ -840,8 +840,8 @@ public final class FabricDatabase implements ModuleControl,
       SanityManager.DEBUG_PRINT(GfxdConstants.TRACE_FABRIC_SERVICE_BOOT,
           "Skipping precompilation of inbuilt procedures");
     }
-    dd.createSystemSps(tc, vmKind.isAccessorOrStore() && !skipSPSPrecompile
-        && !this.memStore.isHadoopGfxdLonerMode());
+    // dd.createSystemSps(tc, vmKind.isAccessorOrStore() && !skipSPSPrecompile
+    //    && !this.memStore.isHadoopGfxdLonerMode());
 
     // Execute any provided initial SQL scripts first.
     // remote the initial SQL commands
