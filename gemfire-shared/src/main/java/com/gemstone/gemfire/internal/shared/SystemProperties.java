@@ -228,7 +228,8 @@ public final class SystemProperties {
 
   public static Callbacks getGFXDServerCallbacks() {
     try {
-      Class<?> factoryProvider = Class.forName(GFXD_FACTORY_PROVIDER);
+      Class<?> factoryProvider = Class.forName(GFXD_FACTORY_PROVIDER,
+          true, ClassLoader.getSystemClassLoader());
       Method method;
 
       method = factoryProvider.getDeclaredMethod("getSystemCallbacksImpl");

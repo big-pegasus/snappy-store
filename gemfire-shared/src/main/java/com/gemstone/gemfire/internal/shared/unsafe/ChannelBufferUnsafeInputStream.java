@@ -45,7 +45,6 @@ import javax.annotation.Nonnull;
 import com.gemstone.gemfire.internal.shared.ChannelBufferInputStream;
 import com.gemstone.gemfire.internal.shared.ClientSharedUtils;
 import com.gemstone.gemfire.internal.shared.InputStreamChannel;
-import org.apache.spark.unsafe.Platform;
 
 /**
  * A more efficient implementation of {@link ChannelBufferInputStream}
@@ -119,7 +118,7 @@ public class ChannelBufferUnsafeInputStream extends InputStreamChannel {
         return -1;
       }
     }
-    return (Platform.getByte(null, this.addrPosition++) & 0xff);
+    return UnsafeHolder.getUnsafe().getByte(null, this.addrPosition++) & 0xff;
   }
 
   private int read_(byte[] buf, int off, int len) throws IOException {
@@ -137,8 +136,8 @@ public class ChannelBufferUnsafeInputStream extends InputStreamChannel {
     final int remaining = (int)(this.addrLimit - this.addrPosition);
     if (len <= remaining) {
       if (len > 0) {
-        Platform.copyMemory(null, this.addrPosition, buf,
-            Platform.BYTE_ARRAY_OFFSET + off, len);
+        UnsafeHolder.copyMemory(null, this.addrPosition, buf,
+            UnsafeHolder.getByteArrayOffset() + off, len);
         this.addrPosition += len;
         return len;
       } else {
@@ -150,8 +149,8 @@ public class ChannelBufferUnsafeInputStream extends InputStreamChannel {
     // caller should invoke in a loop if buffer is still not full
     int readBytes = 0;
     if (remaining > 0) {
-      Platform.copyMemory(null, this.addrPosition, buf,
-          Platform.BYTE_ARRAY_OFFSET + off, remaining);
+      UnsafeHolder.copyMemory(null, this.addrPosition, buf,
+          UnsafeHolder.getByteArrayOffset() + off, remaining);
       this.addrPosition += remaining;
       off += remaining;
       len -= remaining;
@@ -162,8 +161,8 @@ public class ChannelBufferUnsafeInputStream extends InputStreamChannel {
       if (len > bufBytes) {
         len = bufBytes;
       }
-      Platform.copyMemory(null, this.addrPosition, buf,
-          Platform.BYTE_ARRAY_OFFSET + off, len);
+      UnsafeHolder.copyMemory(null, this.addrPosition, buf,
+          UnsafeHolder.getByteArrayOffset() + off, len);
       this.addrPosition += len;
       return (readBytes + len);
     } else {
@@ -228,10 +227,10 @@ public class ChannelBufferUnsafeInputStream extends InputStreamChannel {
       addrPos = this.addrPosition;
     }
     this.addrPosition += 4;
-    if (ClientSharedUtils.isLittleEndian) {
-      return Integer.reverseBytes(Platform.getInt(null, addrPos));
+    if (UnsafeHolder.littleEndian) {
+      return Integer.reverseBytes(UnsafeHolder.getUnsafe().getInt(null, addrPos));
     } else {
-      return Platform.getInt(null, addrPos);
+      return UnsafeHolder.getUnsafe().getInt(null, addrPos);
     }
   }
 

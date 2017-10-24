@@ -56,7 +56,6 @@ import com.gemstone.gemfire.cache.DataPolicy;
 import com.gemstone.gemfire.cache.Region;
 import com.gemstone.gemfire.distributed.internal.DistributionManager;
 import com.gemstone.gemfire.distributed.internal.InternalDistributedSystem;
-import com.gemstone.gemfire.distributed.internal.locks.DLockService;
 import com.gemstone.gemfire.internal.ClassPathLoader;
 import com.gemstone.gemfire.internal.GFToSlf4jBridge;
 import com.gemstone.gemfire.internal.LogWriterImpl;
@@ -69,6 +68,7 @@ import com.gemstone.gnu.trove.TObjectIntHashMap;
 import com.pivotal.gemfirexd.Attribute;
 import com.pivotal.gemfirexd.FabricService;
 import com.pivotal.gemfirexd.FabricServiceManager;
+import com.pivotal.gemfirexd.internal.catalog.ExternalCatalog;
 import com.pivotal.gemfirexd.internal.catalog.SystemProcedures;
 import com.pivotal.gemfirexd.internal.catalog.UUID;
 import com.pivotal.gemfirexd.internal.engine.Misc;
@@ -88,7 +88,6 @@ import com.pivotal.gemfirexd.internal.engine.distributed.GfxdMessage;
 import com.pivotal.gemfirexd.internal.engine.distributed.utils.GemFireXDUtils;
 import com.pivotal.gemfirexd.internal.engine.fabricservice.FabricServiceImpl;
 import com.pivotal.gemfirexd.internal.engine.jdbc.GemFireXDRuntimeException;
-import com.pivotal.gemfirexd.internal.engine.locks.GfxdLockSet;
 import com.pivotal.gemfirexd.internal.engine.management.GfxdManagementService;
 import com.pivotal.gemfirexd.internal.engine.management.GfxdResourceEvent;
 import com.pivotal.gemfirexd.internal.engine.sql.execute.DistributionObserver;
@@ -532,27 +531,18 @@ public final class FabricDatabase implements ModuleControl,
       Set<?> servers = GemFireXDUtils.getGfxdAdvisor().adviseDataStores(null);
       if (this.memStore.isSnappyStore() && (this.memStore.getMyVMKind() ==
           GemFireStore.VMKind.DATASTORE || (isLead && servers.size() > 0))) {
-        // Take write lock on data dictionary. Because of this all the servers will will initiate their
-        // hive client one by one. This is important as we have downgraded the ISOLATION LEVEL from
-        // SERIALIZABLE to REPEATABLE READ
-        final String hiveClientObject = "HiveMetaStoreClient";
-        final DLockService lockService = memStore.getDDLLockService();
-        final boolean writeLockTaken = lockService.lock(hiveClientObject,
-            GfxdLockSet.MAX_LOCKWAIT_VAL, -1);
-        try {
-          //writeLockTaken = this.dd.lockForWriting(tc, false);
-          // Changed from ddlLockObject
-          this.memStore.initExternalCatalog();
-        } finally {
-          if (writeLockTaken) {
-            //this.dd.unlockAfterWriting(tc, false);
-            lockService.unlock(hiveClientObject);
-          }
+        this.memStore.initExternalCatalog();
+        if (isLead && servers.size() > 0) {
+          // submit the task to check for catalog consistency
+          this.memStore.setExternalCatalogInit(cache.getDistributionManager()
+              .getFunctionExcecutor().submit(() -> {
+                try {
+                  checkSnappyCatalogConsistency(embedConn);
+                } catch (StandardException | SQLException e) {
+                  throw new GemFireXDRuntimeException(e);
+                }
+              }));
         }
-      }
-
-      if (isLead && servers.size() > 0) {
-        checkSnappyCatalogConsistency(embedConn);
       }
 
       if (this.memStore.isSnappyStore() && (this.memStore.getMyVMKind() ==
@@ -601,9 +591,14 @@ public final class FabricDatabase implements ModuleControl,
    * @throws StandardException
    * @throws SQLException
    */
-  public static void checkSnappyCatalogConsistency(
-      EmbedConnection embedConn)
+  public static void checkSnappyCatalogConsistency(EmbedConnection embedConn)
       throws StandardException, SQLException {
+    final ExternalCatalog externalCatalog = Misc.getMemStoreBooting()
+        .getExternalCatalog(false);
+    if (externalCatalog == null) {
+      return;
+    }
+
     final LanguageConnectionContext lcc = embedConn.getLanguageConnection();
     final GemFireTransaction tc = (GemFireTransaction)lcc
         .getTransactionExecute();
@@ -612,8 +607,7 @@ public final class FabricDatabase implements ModuleControl,
 
     try {
       lcc.getDataDictionary().lockForReading(tc);
-      hiveDBTablesMap =
-          Misc.getMemStoreBooting().getExternalCatalog().getAllStoreTablesInCatalog(true);
+      hiveDBTablesMap = externalCatalog.getAllStoreTablesInCatalog(true);
       gfDBTablesMap = getAllGFXDTables();
     } finally {
       lcc.getDataDictionary().unlockAfterReading(tc);
@@ -621,8 +615,7 @@ public final class FabricDatabase implements ModuleControl,
 //    SanityManager.DEBUG_PRINT("info", "hiveDBTablesMap = " + hiveDBTablesMap);
 
     // remove Hive store's own tables
-    gfDBTablesMap.remove(
-        Misc.getMemStoreBooting().getExternalCatalog().catalogSchemaName());
+    gfDBTablesMap.remove(externalCatalog.catalogSchemaName());
     // CachedBatch tables (earlier stored in SNAPPYSYS_INTERNAL)
     List<String> internalColumnTablesList = new LinkedList<>();
     List<String> internalColumnTablesListPerSchema = new LinkedList<>();
@@ -646,8 +639,9 @@ public final class FabricDatabase implements ModuleControl,
 //     SanityManager.DEBUG_PRINT("info", "tables in hive store = " + hiveDBTablesMap);
 //     SanityManager.DEBUG_PRINT("info", "tables in DD  = " + gfDBTablesMap);
     removeInconsistentDDEntries(embedConn, hiveDBTablesMap,
-        gfDBTablesMap, internalColumnTablesSet);
-    removeInconsistentHiveEntries(hiveDBTablesMap, gfDBTablesMap);
+        gfDBTablesMap, internalColumnTablesSet, externalCatalog);
+    removeInconsistentHiveEntries(hiveDBTablesMap, gfDBTablesMap,
+        externalCatalog);
   }
 
   /**
@@ -663,7 +657,8 @@ public final class FabricDatabase implements ModuleControl,
   private static void removeInconsistentDDEntries(EmbedConnection embedConn,
       HashMap<String, List<String>> hiveDBTablesMap,
       HashMap<String, List<String>> gfDBTablesMap,
-      Set<String> internalColumnTablesSet) throws SQLException {
+      Set<String> internalColumnTablesSet,
+      ExternalCatalog externalCatalog) throws SQLException {
     for (Map.Entry<String, List<String>> storeEntry : gfDBTablesMap.entrySet()) {
       List<String> hiveTableList = hiveDBTablesMap.get(storeEntry.getKey());
       List<String> storeTablesList = new LinkedList<>(storeEntry.getValue());
@@ -672,7 +667,7 @@ public final class FabricDatabase implements ModuleControl,
       if (!(hiveTableList == null || hiveTableList.isEmpty())) {
         storeTablesList.removeAll(hiveTableList);
       }
-      if (!(storeTablesList == null || storeTablesList.isEmpty())) {
+      if (!storeTablesList.isEmpty()) {
         SanityManager.DEBUG_PRINT("info",
             "Catalog inconsistency detected: following tables " +
                 "in datadictionary are not in Hive metastore: " +
@@ -683,8 +678,7 @@ public final class FabricDatabase implements ModuleControl,
       // DD contains row buffer but not the column buffer of the table
       List<String> tablesMissingColumnBuffer = new LinkedList<>();
       for (String storeTable : storeEntry.getValue()) {
-        if (Misc.getMemStoreBooting().getExternalCatalog().
-            isColumnTable(storeEntry.getKey(), storeTable, false)) {
+        if (externalCatalog.isColumnTable(storeEntry.getKey(), storeTable, false)) {
           String columnBatchTable = com.gemstone.gemfire.
               internal.snappy.CallbackFactoryProvider.getStoreCallbacks().
               columnBatchTableName(storeEntry.getKey() + "." + storeTable);
@@ -701,7 +695,8 @@ public final class FabricDatabase implements ModuleControl,
                 "do not have column buffer: " +
                 "schema = " + storeEntry.getKey() + " tables = " + tablesMissingColumnBuffer);
         dropTables(embedConn, storeEntry.getKey(), tablesMissingColumnBuffer);
-        removeTableFromHivestore(storeEntry.getKey(), tablesMissingColumnBuffer);
+        removeTableFromHivestore(storeEntry.getKey(),
+            tablesMissingColumnBuffer, externalCatalog);
       }
     }
   }
@@ -713,7 +708,8 @@ public final class FabricDatabase implements ModuleControl,
    */
   private static void removeInconsistentHiveEntries(
       HashMap<String, List<String>> hiveDBTablesMap,
-      HashMap<String, List<String>> gfDBTablesMap) {
+      HashMap<String, List<String>> gfDBTablesMap,
+      ExternalCatalog externalCatalog) {
     // remove tables that are in Hive store but not in datadictionary
     for (Map.Entry<String, List<String>> hiveEntry : hiveDBTablesMap.entrySet()) {
       List<String> storeTableList = gfDBTablesMap.get(hiveEntry.getKey());
@@ -722,21 +718,23 @@ public final class FabricDatabase implements ModuleControl,
         hiveTableList.removeAll(storeTableList);
       }
 
-      if (!(hiveTableList == null || hiveTableList.isEmpty())) {
+      if (!hiveTableList.isEmpty()) {
         SanityManager.DEBUG_PRINT("info",
             "Catalog inconsistency detected: following tables " +
                 "in Hive metastore are not in datadictionary: " +
                 "schema = " + hiveEntry.getKey() + " tables = " + hiveTableList);
-        removeTableFromHivestore(hiveEntry.getKey(), hiveTableList);
+        removeTableFromHivestore(hiveEntry.getKey(), hiveTableList,
+            externalCatalog);
       }
     }
   }
 
-  private static final void removeTableFromHivestore(String schema, List<String> tables) {
+  private static final void removeTableFromHivestore(String schema,
+      List<String> tables, ExternalCatalog externalCatalog) {
     for (String table : tables) {
       SanityManager.DEBUG_PRINT("info", "Removing table " +
           schema + "." + table + " from Hive metastore");
-      Misc.getMemStoreBooting().getExternalCatalog().removeTable(schema, table, false);
+      externalCatalog.removeTable(schema, table, false);
     }
   }
 

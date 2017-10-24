@@ -41,6 +41,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.channels.WritableByteChannel;
 import java.util.concurrent.atomic.AtomicLong;
@@ -52,7 +53,6 @@ import com.gemstone.gemfire.internal.shared.ChannelBufferInputStream;
 import com.gemstone.gemfire.internal.shared.ChannelBufferOutputStream;
 import com.gemstone.gemfire.internal.shared.InputStreamChannel;
 import com.gemstone.gemfire.internal.shared.OutputStreamChannel;
-import org.apache.spark.unsafe.Platform;
 
 /**
  * Holder for static sun.misc.Unsafe instance and some convenience methods. Use
@@ -66,6 +66,8 @@ public abstract class UnsafeHolder {
   private static final class Wrapper {
 
     static final sun.misc.Unsafe unsafe;
+    static final int byteArrayOffset;
+    static final boolean unaligned;
     static final Constructor<?> directBufferConstructor;
     static final Field cleanerField;
     static final Field cleanerRunnableField;
@@ -78,13 +80,15 @@ public abstract class UnsafeHolder {
       Field cleaner;
       Field runnableField = null;
       try {
+        final ClassLoader systemLoader = ClassLoader.getSystemClassLoader();
         // try using "theUnsafe" field
         Field field = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
         field.setAccessible(true);
         v = (sun.misc.Unsafe)field.get(null);
 
         // get the constructor of DirectByteBuffer that accepts a Runnable
-        Class<?> cls = Class.forName("java.nio.DirectByteBuffer");
+        Class<?> cls = Class.forName("java.nio.DirectByteBuffer",
+            false, systemLoader);
         dbConstructor = cls.getDeclaredConstructor(Long.TYPE, Integer.TYPE);
         dbConstructor.setAccessible(true);
 
@@ -103,6 +107,12 @@ public abstract class UnsafeHolder {
           }
         }
 
+        Class<?> bitsClass = Class.forName("java.nio.Bits",
+            false, systemLoader);
+        Method m = bitsClass.getDeclaredMethod("unaligned");
+        m.setAccessible(true);
+        unaligned = Boolean.TRUE.equals(m.invoke(null));
+
       } catch (LinkageError le) {
         throw le;
       } catch (Throwable t) {
@@ -116,6 +126,7 @@ public abstract class UnsafeHolder {
             "DirectByteBuffer cleaner thunk runnable field not found");
       }
       unsafe = v;
+      byteArrayOffset = v.arrayBaseOffset(byte[].class);
       directBufferConstructor = dbConstructor;
       cleanerField = cleaner;
       cleanerRunnableField = runnableField;
@@ -142,6 +153,11 @@ public abstract class UnsafeHolder {
   }
 
   private static final boolean hasUnsafe;
+  // Limit to the chunk copied per Unsafe.copyMemory call to allow for
+  // safepoint polling by JVM.
+  private static final long UNSAFE_COPY_THRESHOLD = 1L << 20;
+  public static final boolean littleEndian =
+      ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
 
   static {
     boolean v;
@@ -182,7 +198,7 @@ public abstract class UnsafeHolder {
     public void run() {
       final long address = tryFree();
       if (address != 0) {
-        Platform.freeMemory(address);
+        Wrapper.unsafe.freeMemory(address);
       }
     }
   }
@@ -202,7 +218,7 @@ public abstract class UnsafeHolder {
       FreeMemoryFactory factory) {
     final int allocSize = getAllocationSize(size);
     final ByteBuffer buffer = allocateDirectBuffer(
-        Platform.allocateMemory(allocSize), allocSize, factory);
+        Wrapper.unsafe.allocateMemory(allocSize), allocSize, factory);
     buffer.limit(size);
     return buffer;
   }
@@ -217,7 +233,7 @@ public abstract class UnsafeHolder {
       Wrapper.cleanerField.set(buffer, cleaner);
       return buffer;
     } catch (Exception e) {
-      Platform.throwException(e);
+      Wrapper.unsafe.throwException(e);
       throw new IllegalStateException("unreachable");
     }
   }
@@ -247,7 +263,7 @@ public abstract class UnsafeHolder {
         // use the efficient realloc call if possible
         if ((freeMemory instanceof FreeMemory) &&
             ((FreeMemory)freeMemory).tryFree() != 0L) {
-          newAddress = getUnsafe().reallocateMemory(address, newSize);
+          newAddress = Wrapper.unsafe.reallocateMemory(address, newSize);
         }
       } catch (IllegalAccessException e) {
         // fallback to full copy
@@ -258,8 +274,8 @@ public abstract class UnsafeHolder {
         throw new IllegalStateException("Expected class to be " +
             expectedClass.getName() + " in reallocate but was non-runnable");
       }
-      newAddress = Platform.allocateMemory(newSize);
-      Platform.copyMemory(null, address, null, newAddress,
+      newAddress = Wrapper.unsafe.allocateMemory(newSize);
+      copyMemory(null, address, null, newAddress,
           Math.min(newSize, buffer.limit()));
     }
     // clean only after copying is done
@@ -348,6 +364,41 @@ public abstract class UnsafeHolder {
 
   public static sun.misc.Unsafe getUnsafe() {
     return Wrapper.unsafe;
+  }
+
+  public static int getByteArrayOffset() {
+    return Wrapper.byteArrayOffset;
+  }
+
+  /**
+   * Copy memory in blocks for large chunks rather than one-shot.
+   * Taken from Spark's Platform.copyMemory and java.nio.Bits.copy* methods.
+   * For JVM safepoint polling (e.g. see discussion
+   * <a href="https://groups.google.com/forum/#!topic/mechanical-sympathy/f3g8pry-o1A">here</a>)
+   */
+  public static void copyMemory(Object src, long srcOffset,
+      Object dst, long dstOffset, long length) {
+    // Check if dstOffset is before or after srcOffset to determine if we should copy
+    // forward or backwards. This is necessary in case src and dst overlap.
+    if (dstOffset < srcOffset) {
+      while (length > 0) {
+        long size = Math.min(length, UNSAFE_COPY_THRESHOLD);
+        Wrapper.unsafe.copyMemory(src, srcOffset, dst, dstOffset, size);
+        length -= size;
+        srcOffset += size;
+        dstOffset += size;
+      }
+    } else {
+      srcOffset += length;
+      dstOffset += length;
+      while (length > 0) {
+        long size = Math.min(length, UNSAFE_COPY_THRESHOLD);
+        srcOffset -= size;
+        dstOffset -= size;
+        Wrapper.unsafe.copyMemory(src, srcOffset, dst, dstOffset, size);
+        length -= size;
+      }
+    }
   }
 
   @SuppressWarnings("resource")
