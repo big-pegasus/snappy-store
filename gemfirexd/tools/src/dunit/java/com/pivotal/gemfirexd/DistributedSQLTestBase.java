@@ -19,7 +19,6 @@ package com.pivotal.gemfirexd;
 import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
-import java.net.InetAddress;
 import java.net.Socket;
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -42,7 +41,6 @@ import com.gemstone.gemfire.cache.wan.GatewaySender;
 import com.gemstone.gemfire.distributed.DistributedMember;
 import com.gemstone.gemfire.distributed.internal.DistributionConfig;
 import com.gemstone.gemfire.internal.AvailablePort;
-import com.gemstone.gemfire.internal.SocketCreator;
 import com.gemstone.gemfire.internal.cache.CachePerfStats;
 import com.gemstone.gemfire.internal.cache.DiskStoreImpl;
 import com.gemstone.gemfire.internal.cache.GemFireCacheImpl;
@@ -299,8 +297,19 @@ public class DistributedSQLTestBase extends DistributedTestBase {
     return "localhost[" + getDUnitLocatorPort() + ']';
   }
 
-  protected void baseSetUp() throws Exception {
-    super.setUp();
+  public static void resetConnection() throws SQLException {
+    Connection conn = TestUtil.jdbcConn;
+    if (conn != null) {
+      try {
+        conn.rollback();
+        conn.close();
+      } catch (SQLException ignored) {
+      }
+      TestUtil.jdbcConn = null;
+    }
+  }
+
+  protected void commonSetUp() throws Exception {
     GemFireXDUtils.IS_TEST_MODE = true;
 
     expectedDerbyExceptions.clear();
@@ -321,18 +330,24 @@ public class DistributedSQLTestBase extends DistributedTestBase {
     setLogFile(this.getClass().getName(), this.getName(), numVMs);
     invokeInEveryVM(this.getClass(), "setLogFile", new Object[] {
         this.getClass().getName(), this.getName(), numVMs });
+  }
 
+  protected void baseSetUp() throws Exception {
+    super.setUp();
+    commonSetUp();
     // reduce logging if test so requests
     String logLevel;
     if ((logLevel = reduceLogging()) != null) {
       reduceLogLevelForTest(logLevel);
     }
-    IndexPersistenceDUnit.deleteAllOplogFiles();
+    resetConnection();
+    invokeInEveryVM(DistributedSQLTestBase.class, "resetConnection");
   }
 
   @Override
   public void setUp() throws Exception {
     baseSetUp();
+    IndexPersistenceDUnit.deleteAllOplogFiles();
   }
 
   protected void reduceLogLevelForTest(String logLevel) {
@@ -352,6 +367,7 @@ public class DistributedSQLTestBase extends DistributedTestBase {
     // also set the client driver properties
     TestUtil.setPropertyIfAbsent(null, GfxdConstants.GFXD_CLIENT_LOG_FILE,
         logFilePrefix + "-client.log");
+    GemFireXDUtils.initFlags();
     // set preallocate to false in all the dunit
     setPreallocateSysPropsToFalse();
     vmCount = numVMs;
@@ -498,6 +514,7 @@ public class DistributedSQLTestBase extends DistributedTestBase {
         testLogPrefix + ".gfs");
     //setGFXDProperty(props, DistributionConfig.STATISTIC_SAMPLING_ENABLED_NAME,
     //    "true");
+    setGFXDProperty(props, DistributionConfig.BIND_ADDRESS_NAME, "localhost");
 
     // get the VM specific properties from DUnitEnv
     Properties dsProps = DUnitEnv.get().getDistributedSystemProperties();
@@ -509,18 +526,13 @@ public class DistributedSQLTestBase extends DistributedTestBase {
     }
 
     //setGFXDProperty(props, "enable-network-partition-detection", "true");
-    // reduce timeout properties for faster WAN dunit runs
-    if (vmCount >= 8) {
-      System.setProperty("p2p.discoveryTimeout", "1000");
-      System.setProperty("p2p.joinTimeout", "2000");
-      setGFXDProperty(props, "member-timeout", "2000");
-      System.setProperty("p2p.leaveTimeout", "1000");
-      System.setProperty("p2p.socket_timeout", "4000");
-      System.setProperty("p2p.disconnectDelay", "500");
-      System.setProperty("p2p.handshakeTimeoutMs", "2000");
-      System.setProperty("p2p.lingerTime", "500");
-      System.setProperty("p2p.listenerCloseTimeout", "4000");
-    }
+    // reduce timeout properties for faster dunit runs
+    System.setProperty("p2p.discoveryTimeout", "2000");
+    System.setProperty("p2p.joinTimeout", "2000");
+    System.setProperty("p2p.minJoinTries", "1");
+    System.setProperty("p2p.disconnectDelay", "1000");
+    System.setProperty("p2p.listenerCloseTimeout", "5000");
+
     if (extraProps != null) {
       Enumeration<?> e = extraProps.propertyNames();
       while (e.hasMoreElements()) {
@@ -589,7 +601,7 @@ public class DistributedSQLTestBase extends DistributedTestBase {
         .getConstructor(String.class).newInstance(name);
     if (extraProps != null && !extraProps.containsKey("locators")) {
       if (locatorBindAdress == null) {
-        locatorBindAdress = SocketCreator.getLocalHost().getHostName();
+        locatorBindAdress = "localhost";
       }
       extraProps.setProperty("locators", locatorBindAdress + '[' + locatorPort
           + ']');
@@ -1716,14 +1728,6 @@ public class DistributedSQLTestBase extends DistributedTestBase {
     }
   }
 
-  public static final String getQualifiedInetAddress(final InetAddress addr) {
-    final String hostName = addr.getCanonicalHostName();
-    if (hostName != null) {
-      return hostName + '/' + addr.getHostAddress();
-    }
-    return "/" + addr.getHostAddress();
-  }
-
   protected final static AtomicInteger numConnectionsOpened =
     new AtomicInteger(0);
 
@@ -1970,7 +1974,8 @@ public class DistributedSQLTestBase extends DistributedTestBase {
         else {
           for (DiskStoreImpl ds : cache.listDiskStores()) {
             if (!GfxdConstants.GFXD_DEFAULT_DISKSTORE_NAME.equals(ds.getName())
-                && !GfxdConstants.GFXD_DD_DISKSTORE_NAME.equals(ds.getName())) {
+                && !GfxdConstants.GFXD_DD_DISKSTORE_NAME.equals(ds.getName())
+                && !GfxdConstants.SNAPPY_DEFAULT_DELTA_DISKSTORE.equals(ds.getName())) {
               requiresCleanup[2] = true;
               break;
             }
@@ -2081,9 +2086,9 @@ public class DistributedSQLTestBase extends DistributedTestBase {
                 hdfsStore.getName() + '"');
           }
           for (DiskStoreImpl ds : cache.listDiskStores()) {
-            if (!GfxdConstants.GFXD_DEFAULT_DISKSTORE_NAME.equals(ds
-                .getName()) && !GfxdConstants.GFXD_DD_DISKSTORE_NAME
-                .equals(ds.getName())) {
+            if (!GfxdConstants.GFXD_DEFAULT_DISKSTORE_NAME.equals(ds.getName())
+                && !GfxdConstants.GFXD_DD_DISKSTORE_NAME.equals(ds.getName())
+                && !GfxdConstants.SNAPPY_DEFAULT_DELTA_DISKSTORE.equals(ds.getName())) {
               executeCleanup(stmt, "drop diskstore \"" + ds.getName() + '"');
             }
           }

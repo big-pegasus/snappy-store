@@ -567,15 +567,6 @@ public final class GfxdTXEntryState extends TXEntryState implements
   /**
    * {@inheritDoc}
    */
-  @Unretained
-  @Override
-  public Object getTransformedValue() {
-    return super.getValueInTXOrRegion();
-  }
-
-  /**
-   * {@inheritDoc}
-   */
   @Override
   @Retained
   public Object getValueOffHeapOrDiskWithoutFaultIn(LocalRegion owner) {
@@ -1356,7 +1347,8 @@ public final class GfxdTXEntryState extends TXEntryState implements
   }
 
   @Override
-  public boolean isOverflowedToDisk(LocalRegion r, DiskPosition dp) {
+  public boolean isOverflowedToDisk(LocalRegion r, DiskPosition dp,
+      boolean alwaysFetchPosition) {
     return false;
   }
 

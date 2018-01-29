@@ -28,8 +28,11 @@ import com.gemstone.gemfire.internal.admin.remote.DistributionLocatorId;
  */
 public class GemFireSparkConnectorCacheImpl extends GemFireCacheImpl {
 
-  public static final String gfeGridNamePrefix = "spark.gemfire-grid";
-  public static final String gfeGridPropsPrefix = "spark.gemfire.grid.";
+  // The properties need to be passed from the lead & servers as
+  // snappydata.store.connector.gemfire-grid-one and snappydata.store.connector.gemfire.pingInterval etc
+  public static final String connectorPrefix = "snappydata.connector.";
+  public static final String gfeGridNamePrefix = connectorPrefix + "gemfire-grid";
+  public static final String gfeGridPropsPrefix = connectorPrefix + "grid.";
   public static final String propFreeConnTimeout = "freeConnectionTimeout";
   public static final String propLoadConditioningInterval = "loadConditioningInterval";
   public static final String propSocketBufferSize = "socketBufferSize";
@@ -43,6 +46,7 @@ public class GemFireSparkConnectorCacheImpl extends GemFireCacheImpl {
   public static final String propStatisticInterval = "statisticInterval";
   public static final String propServerGroup = "serverGroup";
   public static final String propPRSingleHopEnabled = "prSingleHopEnabled";
+  public static final String propMultiUserAuthentication = "multiUserAuthentication";
 
   private final Map<String, String> gfeGridMappings;
   private final Map<String, String> gfeGridPoolProps;
@@ -224,6 +228,11 @@ public class GemFireSparkConnectorCacheImpl extends GemFireCacheImpl {
       pf.setLoadConditioningInterval(Integer.parseInt(val.trim()));
     }
 
+    val = gfeGridPoolProps.get(gfeGridPropsPrefix + propMultiUserAuthentication);
+    if (val != null) {
+      pf.setMultiuserAuthentication(Boolean.parseBoolean(val.trim()));
+    }
+
     val = gfeGridPoolProps.get(gfeGridPropsPrefix + propSocketBufferSize);
     if (val != null) {
       pf.setSocketBufferSize(Integer.parseInt(val.trim()));
@@ -238,6 +247,7 @@ public class GemFireSparkConnectorCacheImpl extends GemFireCacheImpl {
     if (val != null) {
       pf.setReadTimeout(Integer.parseInt(val.trim()));
     }
+
 
     val = gfeGridPoolProps.get(gfeGridPropsPrefix + propMinConnections);
     if (val != null) {

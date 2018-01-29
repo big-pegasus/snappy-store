@@ -133,7 +133,7 @@ class POSIXNativeCalls extends NativeCalls {
     public long rlim_max;
 
     @Override
-    protected List<?> getFieldOrder() {
+    protected List<String> getFieldOrder() {
       return Arrays.asList("rlim_cur", "rlim_max");
     }
   }
@@ -243,6 +243,11 @@ class POSIXNativeCalls extends NativeCalls {
    */
   @Override
   public boolean isProcessActive(final int processId) {
+    try {
+      return super.isProcessActive(processId);
+    } catch (UnsupportedOperationException ignored) {
+      // ignore and try "kill -0"
+    }
     try {
       return kill(processId, 0) == 0;
     } catch (LastErrorException le) {

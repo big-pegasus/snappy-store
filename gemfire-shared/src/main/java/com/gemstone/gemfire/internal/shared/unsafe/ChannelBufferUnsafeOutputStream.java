@@ -38,14 +38,12 @@ package com.gemstone.gemfire.internal.shared.unsafe;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.channels.ClosedChannelException;
 import java.nio.channels.WritableByteChannel;
 import javax.annotation.Nonnull;
 
 import com.gemstone.gemfire.internal.shared.ChannelBufferOutputStream;
 import com.gemstone.gemfire.internal.shared.ClientSharedUtils;
 import com.gemstone.gemfire.internal.shared.OutputStreamChannel;
-import org.apache.spark.unsafe.Platform;
 
 /**
  * A somewhat more efficient implementation of {@link ChannelBufferOutputStream}
@@ -147,14 +145,14 @@ public class ChannelBufferUnsafeOutputStream extends OutputStreamChannel {
       final long addrPos = this.addrPosition;
       final int remaining = (int)(this.addrLimit - addrPos);
       if (len <= remaining) {
-        Platform.copyMemory(b, Platform.BYTE_ARRAY_OFFSET + off,
+        UnsafeHolder.copyMemory(b, UnsafeHolder.getByteArrayOffset() + off,
             null, addrPos, len);
         this.addrPosition += len;
         return;
       } else {
         // copy b to buffer and flush
         if (remaining > 0) {
-          Platform.copyMemory(b, Platform.BYTE_ARRAY_OFFSET + off,
+          UnsafeHolder.copyMemory(b, UnsafeHolder.getByteArrayOffset() + off,
               null, addrPos, remaining);
           this.addrPosition += remaining;
           len -= remaining;
@@ -177,7 +175,7 @@ public class ChannelBufferUnsafeOutputStream extends OutputStreamChannel {
     if (this.addrPosition >= this.addrLimit) {
       flushBufferBlocking(this.buffer);
     }
-    Platform.putByte(null, this.addrPosition++, b);
+    UnsafeHolder.getUnsafe().putByte(null, this.addrPosition++, b);
   }
 
   /**
@@ -201,10 +199,6 @@ public class ChannelBufferUnsafeOutputStream extends OutputStreamChannel {
     // reflection to get src's native address in case it is a direct
     // byte buffer. Avoiding the complication since the benefit will be
     // very small in any case (and reflection cost may well offset that).
-
-    if (!isOpen()) {
-      throw new ClosedChannelException();
-    }
 
     // adjust this buffer position first
     this.buffer.position((int)(this.addrPosition - this.baseAddress));
@@ -302,10 +296,10 @@ public class ChannelBufferUnsafeOutputStream extends OutputStreamChannel {
 
   /** Write an integer in big-endian format on given off-heap address. */
   protected static long putInt(long addrPos, final int v) {
-    if (ClientSharedUtils.isLittleEndian) {
-      Platform.putInt(null, addrPos, Integer.reverseBytes(v));
+    if (UnsafeHolder.littleEndian) {
+      UnsafeHolder.getUnsafe().putInt(null, addrPos, Integer.reverseBytes(v));
     } else {
-      Platform.putInt(null, addrPos, v);
+      UnsafeHolder.getUnsafe().putInt(null, addrPos, v);
     }
     return addrPos + 4;
   }

@@ -36,8 +36,6 @@
 package com.gemstone.gemfire.internal.shared;
 
 import java.io.Console;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.ObjectInputStream;
@@ -49,17 +47,17 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.math.BigInteger;
-import java.net.Inet4Address;
-import java.net.Inet6Address;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.net.Socket;
-import java.net.SocketException;
-import java.net.UnknownHostException;
+import java.net.*;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.Channel;
+import java.nio.channels.SocketChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.PrivilegedAction;
 import java.util.*;
+import java.util.concurrent.locks.LockSupport;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -72,9 +70,9 @@ import javax.naming.directory.DirContext;
 import javax.naming.directory.InitialDirContext;
 
 import com.gemstone.gemfire.internal.shared.unsafe.DirectBufferAllocator;
+import com.gemstone.gemfire.internal.shared.unsafe.UnsafeHolder;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.PropertyConfigurator;
-import org.apache.spark.unsafe.Platform;
 
 /**
  * Some shared methods now also used by GemFireXD clients so should not have any
@@ -113,8 +111,7 @@ public abstract class ClientSharedUtils {
 
   private static final Object[] staticZeroLenObjectArray = new Object[0];
 
-  public static final boolean isLittleEndian =
-      ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
+  public static final boolean isLittleEndian = UnsafeHolder.littleEndian;
 
   /**
    * all classes should use this variable to determine whether to use IPv4 or
@@ -137,7 +134,19 @@ public abstract class ClientSharedUtils {
    * The default wait to use when waiting to read/write a channel
    * (when there is no selector to signal)
    */
-  public static final long PARK_NANOS_FOR_READ_WRITE = 50L;
+  public static final long PARK_NANOS_FOR_READ_WRITE = 100L;
+
+  /**
+   * Retries before waiting for {@link #PARK_NANOS_FOR_READ_WRITE}
+   * (when there is no selector to signal)
+   */
+  public static final int RETRIES_BEFORE_PARK = 20;
+
+  /**
+   * Maximum nanos to park thread to wait for reading/writing data in
+   * non-blocking mode (if selector is present then it will explicitly signal)
+   */
+  public static final long PARK_NANOS_MAX = 30000000000L;
 
   public static boolean isUsingThrift(boolean defaultValue) {
     return SystemProperties.getClientInstance().getBoolean(
@@ -198,8 +207,9 @@ public abstract class ClientSharedUtils {
 
   // ------- End constants for date formatting
 
-  private static Logger DEFAULT_LOGGER = Logger.getLogger("");
-  private static Logger logger = DEFAULT_LOGGER;
+  private static volatile Logger _DEFAULT_LOGGER;
+  private static Logger logger;
+  private static final Properties baseLoggerProperties = new Properties();
 
   private static final Constructor<?> stringInternalConstructor;
   private static final int stringInternalConsVersion;
@@ -277,6 +287,62 @@ public abstract class ClientSharedUtils {
       }
     }
     bigIntMagnitude = mag;
+  }
+
+  private static synchronized Logger DEFAULT_LOGGER() {
+    final Logger logger = _DEFAULT_LOGGER;
+    if (logger != null) {
+      return logger;
+    }
+    return (_DEFAULT_LOGGER = Logger.getLogger(""));
+  }
+
+  private static int getShiftMultipler(char unitChar) {
+    switch (Character.toLowerCase(unitChar)) {
+      case 'p': return 50;
+      case 't': return 40;
+      case 'g': return 30;
+      case 'm': return 20;
+      case 'k': return 10;
+      case 'b': return 0;
+      default: return -1;
+    }
+  }
+
+  public static long parseMemorySize(String v, long defaultValue,
+      int defaultShiftMultiplier) {
+    if (v == null || v.length() == 0) {
+      return defaultValue;
+    }
+    final int len = v.length();
+    int unitShiftMultiplier = getShiftMultipler(v.charAt(len - 1));
+    int trimChars = unitShiftMultiplier >= 0 ? 1 : 0;
+    if (unitShiftMultiplier == 0) {
+      // ends with 'b' so could be 'mb', 'gb' etc
+      if (len > 1) {
+        unitShiftMultiplier = getShiftMultipler(v.charAt(len - 2));
+        if (unitShiftMultiplier > 0) {
+          trimChars = 2;
+        } else {
+          unitShiftMultiplier = 0;
+        }
+      }
+    } else if (unitShiftMultiplier < 0) {
+      unitShiftMultiplier = defaultShiftMultiplier;
+    }
+    if (trimChars > 0) {
+      v = v.substring(0, len - trimChars);
+    }
+    try {
+      return Long.parseLong(v) << unitShiftMultiplier;
+    } catch (NumberFormatException nfe) {
+      throw new IllegalArgumentException("Memory size specification = " + v +
+          ": memory size must be specified as <n>[p|t|g|m|k], where <n> is " +
+          "the size and and [p|t|g|m|k] specifies the units in peta|tera|giga|" +
+          "mega|kilobytes. No unit or with 'b' specifies in bytes. " +
+          "Each of these units can be followed optionally by 'b' i.e. " +
+          "pb|tb|gb|mb|kb.", nfe);
+    }
   }
 
   public static String newWrappedString(final char[] chars, final int offset,
@@ -686,7 +752,7 @@ public abstract class ClientSharedUtils {
               log.warning("Failed to set " + opt + " on socket: " + ex);
             } else {
               // just log as an information rather than warning
-              if (log != DEFAULT_LOGGER) { // SNAP-255
+              if (log != DEFAULT_LOGGER()) { // SNAP-255
                 log.info("Failed to set " + opt + " on socket: "
                     + ex.getMessage());
               }
@@ -1288,7 +1354,7 @@ public abstract class ClientSharedUtils {
   }
 
   // Convert log4j.Level to java.util.logging.Level
-  public static Level converToJavaLogLevel(org.apache.log4j.Level log4jLevel) {
+  public static Level convertToJavaLogLevel(org.apache.log4j.Level log4jLevel) {
     Level javaLevel = Level.INFO;
     if (log4jLevel != null) {
       if (log4jLevel == org.apache.log4j.Level.ERROR) {
@@ -1308,41 +1374,65 @@ public abstract class ClientSharedUtils {
     return javaLevel;
   }
 
+  public static String convertToLog4LogLevel(Level level) {
+    String levelStr = "INFO";
+    // convert to log4j level
+    if (level == Level.SEVERE) {
+      levelStr = "ERROR";
+    } else if (level == Level.WARNING) {
+      levelStr = "WARN";
+    } else if (level == Level.INFO || level == Level.CONFIG) {
+      levelStr = "INFO";
+    } else if (level == Level.FINE || level == Level.FINER ||
+        level == Level.FINEST) {
+      levelStr = "TRACE";
+    } else if (level == Level.ALL) {
+      levelStr = "DEBUG";
+    } else if (level == Level.OFF) {
+      levelStr = "OFF";
+    }
+    return levelStr;
+  }
+
   public static void initLog4J(String logFile,
       Level level) throws IOException {
     initLog4J(logFile, null, level);
   }
 
-  public static void initLog4J(String logFile, Properties userProps,
+  public static Properties getLog4jConfProperties(
+      String snappyHome) throws IOException {
+    Path confFile = Paths.get(snappyHome, "conf", "log4j.properties");
+    if (Files.isReadable(confFile)) {
+      try (InputStream in = Files.newInputStream(confFile)) {
+        Properties props = new Properties();
+        props.load(in);
+        return props;
+      }
+    }
+    return null;
+  }
+
+  private static Properties getLog4JProperties(String logFile,
       Level level) throws IOException {
-    // set the log file location
+    // check for user provided properties file in "conf/"
+    String snappyHome = NativeCalls.getInstance().getEnvironment("SNAPPY_HOME");
+    if (snappyHome != null) {
+      Properties props = getLog4jConfProperties(snappyHome);
+      if (props != null) {
+        return props;
+      }
+    }
+
     Properties props = new Properties();
-    InputStream in = ClientSharedUtils.class.getResourceAsStream(
-        "/store-log4j.properties");
-    try {
+    // fallback to defaults
+    try (InputStream in = ClientSharedUtils.class.getResourceAsStream(
+        "/store-log4j.properties")) {
       props.load(in);
-    } finally {
-      in.close();
     }
 
     // override file location and level
     if (level != null) {
-      String levelStr = "INFO";
-      // convert to log4j level
-      if (level == Level.SEVERE) {
-        levelStr = "ERROR";
-      } else if (level == Level.WARNING) {
-        levelStr = "WARN";
-      } else if (level == Level.INFO || level == Level.CONFIG) {
-        levelStr = "INFO";
-      } else if (level == Level.FINE || level == Level.FINER ||
-          level == Level.FINEST) {
-        levelStr = "TRACE";
-      } else if (level == Level.ALL) {
-        levelStr = "DEBUG";
-      } else if (level == Level.OFF) {
-        levelStr = "OFF";
-      }
+      final String levelStr = convertToLog4LogLevel(level);
       if (logFile != null) {
         props.setProperty("log4j.rootCategory", levelStr + ", file");
       } else {
@@ -1353,30 +1443,26 @@ public abstract class ClientSharedUtils {
       props.setProperty("log4j.appender.file.file", logFile);
     }
     // override with any user provided properties file
-    in = ClientSharedUtils.class.getResourceAsStream("/log4j.properties");
-    if (in != null) {
-      Properties setProps = new Properties();
-      try {
-        setProps.load(in);
-      } finally {
-        in.close();
-      }
-      props.putAll(setProps);
-    }
-    // lastly override with user provided properties file in "conf/"
-    String snappyDir = NativeCalls.getInstance().getEnvironment("SNAPPY_HOME");
-    if (snappyDir != null) {
-      File confFile = new File(snappyDir + "/conf", "log4j.properties");
-      if (confFile.canRead()) {
+    try (InputStream in = ClientSharedUtils.class.getResourceAsStream(
+        "/log4j.properties")) {
+      if (in != null) {
         Properties setProps = new Properties();
-        in = new FileInputStream(confFile);
-        try {
-          setProps.load(in);
-        } finally {
-          in.close();
-        }
+        setProps.load(in);
         props.putAll(setProps);
       }
+    }
+    return props;
+  }
+
+  public static synchronized void initLog4J(String logFile,
+      Properties userProps, Level level) throws IOException {
+    Properties props;
+    if (baseLoggerProperties.isEmpty() || logFile != null) {
+      props = getLog4JProperties(logFile, level);
+      baseLoggerProperties.clear();
+      baseLoggerProperties.putAll(props);
+    } else {
+      props = (Properties)baseLoggerProperties.clone();
     }
     if (userProps != null) {
       props.putAll(userProps);
@@ -1388,7 +1474,8 @@ public abstract class ClientSharedUtils {
   public static synchronized void initLogger(String loggerName, String logFile,
       boolean initLog4j, boolean skipIfInitialized, Level level,
       final Handler handler) {
-    if (skipIfInitialized && logger != DEFAULT_LOGGER) {
+    Logger log = logger;
+    if (skipIfInitialized && log != null && log != DEFAULT_LOGGER()) {
       return;
     }
     clearLogger();
@@ -1399,7 +1486,7 @@ public abstract class ClientSharedUtils {
         throw newRuntimeException(ioe.getMessage(), ioe);
       }
     }
-    Logger log = Logger.getLogger(loggerName);
+    log = Logger.getLogger(loggerName);
     log.addHandler(handler);
     log.setLevel(level);
     log.setUseParentHandlers(false);
@@ -1411,8 +1498,17 @@ public abstract class ClientSharedUtils {
     logger = log;
   }
 
+  public static boolean isLoggerInitialized() {
+    final Logger log = logger;
+    return log != null && log != DEFAULT_LOGGER();
+  }
+
   public static Logger getLogger() {
-    return logger;
+    Logger log = logger;
+    if (log == null) {
+      logger = log = DEFAULT_LOGGER();
+    }
+    return log;
   }
 
   public static final long MAG_MASK = 0xFFFFFFFFL;
@@ -1468,20 +1564,20 @@ public abstract class ClientSharedUtils {
     socketKeepAliveCntWarningLogged = false;
   }
 
-  private static void clearLogger() {
+  private static synchronized void clearLogger() {
     final Logger log = logger;
-    if (log != DEFAULT_LOGGER) {
-      logger = DEFAULT_LOGGER;
+    if (log != null && log != DEFAULT_LOGGER()) {
       for (Handler h : log.getHandlers()) {
         log.removeHandler(h);
         // try and close the handler ignoring any exceptions
         try {
           h.close();
-        } catch (Exception ex) {
-          // ignore
+        } catch (Exception ignore) {
         }
       }
     }
+    logger = null;
+    baseLoggerProperties.clear();
   }
 
   /**
@@ -1735,29 +1831,6 @@ public abstract class ClientSharedUtils {
     return tokenFound;
   }
 
-  public static boolean equalBuffers(final ByteBuffer connToken,
-      final ByteBuffer otherId) {
-    if (connToken == otherId) {
-      return true;
-    }
-
-    // this.connId always wraps full array
-    assert ClientSharedUtils.wrapsFullArray(connToken);
-
-    if (otherId != null) {
-      if (ClientSharedUtils.wrapsFullArray(otherId)) {
-        return Arrays.equals(otherId.array(), connToken.array());
-      }
-      else {
-        // don't create intermediate byte[]
-        return equalBuffers(connToken.array(), otherId);
-      }
-    }
-    else {
-      return false;
-    }
-  }
-
   public static boolean equalBuffers(final byte[] bytes,
       final ByteBuffer buffer) {
     final int len = bytes.length;
@@ -1770,11 +1843,11 @@ public abstract class ClientSharedUtils {
     final boolean sameOrder = ByteOrder.nativeOrder() == buffer.order();
     // round off to nearest factor of 8 to read in longs
     final int endRound8Pos = (len % 8) != 0 ? (endPos - 8) : endPos;
-    long indexPos = Platform.BYTE_ARRAY_OFFSET;
+    long indexPos = UnsafeHolder.getByteArrayOffset();
     while (pos < endRound8Pos) {
       // splitting into longs is faster than reading one byte at a time even
       // though it costs more operations (about 20% in micro-benchmarks)
-      final long s = Platform.getLong(bytes, indexPos);
+      final long s = UnsafeHolder.getUnsafe().getLong(bytes, indexPos);
       final long v = buffer.getLong(pos);
       if (sameOrder) {
         if (s != v) {
@@ -1787,7 +1860,7 @@ public abstract class ClientSharedUtils {
       indexPos += 8;
     }
     while (pos < endPos) {
-      if (Platform.getByte(bytes, indexPos) != buffer.get(pos)) {
+      if (UnsafeHolder.getUnsafe().getByte(bytes, indexPos) != buffer.get(pos)) {
         return false;
       }
       pos++;
@@ -1829,6 +1902,53 @@ public abstract class ClientSharedUtils {
       }
     }
     return utfLen;
+  }
+
+  public static boolean isSocketToSameHost(Channel channel) {
+    try {
+      if (channel instanceof SocketChannel) {
+        SocketChannel socketChannel = (SocketChannel)channel;
+        return isSocketToSameHost(socketChannel.getLocalAddress(),
+            socketChannel.getRemoteAddress());
+      }
+    } catch (IOException ignored) {
+    }
+    return false;
+  }
+
+  public static boolean isSocketToSameHost(SocketAddress localSockAddress,
+      SocketAddress remoteSockAddress) {
+    if ((localSockAddress instanceof InetSocketAddress) &&
+        (remoteSockAddress instanceof InetSocketAddress)) {
+      InetAddress localAddress = ((InetSocketAddress)localSockAddress)
+          .getAddress();
+      return localAddress != null && localAddress.equals(
+          ((InetSocketAddress)remoteSockAddress).getAddress());
+    } else {
+      return false;
+    }
+  }
+
+  public static long parkThreadForAsyncOperationIfRequired(
+      final StreamChannel channel, long parkedNanos, int numTries)
+      throws SocketTimeoutException {
+    // at this point we are out of the selector thread and don't want to
+    // create unlimited size buffers upfront in selector, so will use
+    // simple signalling between selector and this thread to proceed
+    if ((numTries % RETRIES_BEFORE_PARK) == 0) {
+      if (channel != null) {
+        channel.setParkedThread(Thread.currentThread());
+      }
+      LockSupport.parkNanos(PARK_NANOS_FOR_READ_WRITE);
+      if (channel != null) {
+        channel.setParkedThread(null);
+        if ((parkedNanos += ClientSharedUtils.PARK_NANOS_FOR_READ_WRITE) >
+            channel.getParkNanosMax()) {
+          throw new SocketTimeoutException("Connection operation timed out.");
+        }
+      }
+    }
+    return parkedNanos;
   }
 
   public static final ThreadLocal ALLOW_THREADCONTEXT_CLASSLOADER =

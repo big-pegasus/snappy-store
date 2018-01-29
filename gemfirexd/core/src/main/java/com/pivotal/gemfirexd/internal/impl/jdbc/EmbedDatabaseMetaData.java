@@ -1794,11 +1794,11 @@ public class EmbedDatabaseMetaData extends ConnectionChild
 		/* Original code
 		final int numberOfTableTypesInDerby = 4;
 		*/
-		final int numberOfTableTypesInDerby = 9;
+		final int numberOfTableTypesInDerby = 10;
 		//GemStone changes END
 
 		if (types == null)  {// null means all types 
-			types = new String[] {"TABLE","VIEW","SYNONYM","SYSTEM TABLE"
+			types = new String[] {"ROW TABLE","VIEW","SYNONYM","SYSTEM TABLE"
 			/* GemStone changes BEGIN */, "COLUMN TABLE",
 			"EXTERNAL TABLE", "STREAM TABLE", "SAMPLE TABLE", "TOPK TABLE"
 			/* GemStone changes END */};
@@ -1808,10 +1808,12 @@ public class EmbedDatabaseMetaData extends ConnectionChild
 			typeParams[i] = null;
 		
 		for (int i = 0; i<types.length; i++){
-			if ("TABLE".equals(types[i]))
+			if ("TABLE".equals(types[i]) || "ROW TABLE".equals(types[i]))
 				typeParams[0] = "T";
-			else if ("VIEW".equals(types[i]))
+			else if ("VIEW".equals(types[i])) {
 				typeParams[1] = "V";
+				typeParams[9] = "VIEW"; // for hive-metastore tables
+			}
 			else if ("SYNONYM".equals(types[i]))
 				typeParams[2] = "A";
 			else if ("SYSTEM TABLE".equals(types[i]) ||
@@ -3612,6 +3614,13 @@ public class EmbedDatabaseMetaData extends ConnectionChild
                                                                 boolean net)
         throws SQLException 
 	{
+		// [snappydata] treat system procedures like other normal ones
+		String queryText = getQueryDescriptions(net).getProperty(nameKey);
+		if (queryText == null) {
+			throw Util.notImplemented(nameKey);
+		}
+		return getEmbedConnection().prepareMetaDataStatement(queryText);
+		/* (original code)
 		synchronized (getConnectionSynchronization())
 		{
 			setupContextStack(true);
@@ -3640,6 +3649,7 @@ public class EmbedDatabaseMetaData extends ConnectionChild
 			}
 			return ps;
 		}
+		*/
 	}
 
 	/**

@@ -45,7 +45,6 @@ import com.gemstone.gemfire.distributed.internal.DistributionManager;
 import com.gemstone.gemfire.distributed.internal.InternalDistributedSystem;
 import com.gemstone.gemfire.internal.AvailablePort;
 import com.gemstone.gemfire.internal.NanoTimer;
-import com.gemstone.gemfire.internal.SocketCreator;
 import com.gemstone.gemfire.internal.cache.CacheServerLauncher;
 import com.gemstone.gemfire.internal.cache.GemFireCacheImpl;
 import com.gemstone.gemfire.internal.cache.LocalRegion;
@@ -57,6 +56,7 @@ import com.gemstone.gemfire.internal.cache.xmlcache.CacheCreation;
 import com.gemstone.gemfire.internal.cache.xmlcache.CacheXmlGenerator;
 import com.gemstone.gemfire.internal.cache.xmlcache.RegionAttributesCreation;
 import com.gemstone.gemfire.internal.cache.xmlcache.RegionCreation;
+import com.gemstone.gemfire.internal.shared.ClientSharedUtils;
 import com.gemstone.gemfire.internal.shared.NativeCalls;
 import com.gemstone.gemfire.internal.shared.jna.OSType;
 import com.gemstone.gemfire.internal.shared.StringPrintWriter;
@@ -76,6 +76,7 @@ import com.pivotal.gemfirexd.internal.engine.access.index.MemIndex;
 import com.pivotal.gemfirexd.internal.engine.access.index.MemIndexScanController;
 import com.pivotal.gemfirexd.internal.engine.access.index.SortedMap2IndexScanController;
 import com.pivotal.gemfirexd.internal.engine.db.FabricDatabase;
+import com.pivotal.gemfirexd.internal.engine.ddl.catalog.messages.GfxdSystemProcedureMessage;
 import com.pivotal.gemfirexd.internal.engine.ddl.resolver.GfxdPartitionResolver;
 import com.pivotal.gemfirexd.internal.engine.distributed.metadata.SelectQueryInfo;
 import com.pivotal.gemfirexd.internal.engine.distributed.utils.GemFireXDUtils;
@@ -225,6 +226,18 @@ public class TestUtil extends TestCase {
       System.setProperty("DistributionManager.VERBOSE",
           Boolean.toString(oldDMVerbose));
       System.clearProperty("gemfire.log-level");
+      logLevel = "config";
+    }
+    try {
+      if (Misc.getGemFireCacheNoThrow() != null) {
+        // convert logLevel to slf4j name
+        String level = ClientSharedUtils.convertToLog4LogLevel(
+            java.util.logging.Level.parse(logLevel.toUpperCase(Locale.ENGLISH)));
+        GfxdSystemProcedureMessage.SysProcMethod.setLogLevel.processMessage(
+            new Object[]{"", level}, Misc.getMyId());
+      }
+    } catch (Exception e) {
+      getLogger().warn("Failed to set log-level " + logLevel, e);
     }
   }
 
@@ -493,6 +506,11 @@ public class TestUtil extends TestCase {
           testName + "-client.log");
     }
 
+    // set default bind-address to localhost so tests can be run
+    // even if network interfaces change
+    setPropertyIfAbsent(props, DistributionConfig.BIND_ADDRESS_NAME,
+        "localhost");
+
     // set mcast port to zero if not set
     setPropertyIfAbsent(props, "mcast-port", "0");
     return props;
@@ -642,7 +660,7 @@ public class TestUtil extends TestCase {
     final Connection conn;
     try {
       if (host == null) {
-        host = SocketCreator.getLocalHost().getHostName();
+        host = "localhost";
       }
       conn = DriverManager.getConnection(
           getNetProtocol(host, port) + urlSuffix, getNetProperties(props));
@@ -656,7 +674,7 @@ public class TestUtil extends TestCase {
       }
       */
       return conn;
-    } catch (UnknownHostException e) {
+    } catch (RuntimeException e) {
       throw new AssertionError(e);
     }
   }
@@ -2033,8 +2051,7 @@ public class TestUtil extends TestCase {
 
   public static String startNetServer(int netPort, Properties extraProps)
       throws Exception {
-    final String localHostName = SocketCreator.getLocalHost().getHostName();
-    return startNetServer(localHostName, netPort, extraProps);
+    return startNetServer("localhost", netPort, extraProps);
   }
 
   public static String startNetServer(String hostName, int netPort,
@@ -2061,8 +2078,7 @@ public class TestUtil extends TestCase {
       try {
         logger = getLogger();
         netServer.stop();
-        logger.info(netServer.status() + " gemfirexd network server on host "
-            + SocketCreator.getLocalHost().getHostName());
+        logger.info(netServer.status() + " gemfirexd network server on localhost");
       } catch (Exception ex) {
         if (logger != null) {
           logger.error("Failed in gemfirexd network server shutdown", ex);

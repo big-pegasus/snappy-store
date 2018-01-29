@@ -287,8 +287,8 @@ public class StatementPlanDUnit extends DistributedSQLTestBase {
 
         Connection conn = TestUtil.getNetConnection(netPort, null, p);
         
-        final ResultSet rs = conn.getMetaData().getTables((String)null, null,
-            "course".toUpperCase(), new String[] { "TABLE" });
+        final ResultSet rs = conn.getMetaData().getTables(null, null,
+            "course".toUpperCase(), new String[] { "ROW TABLE" });
         final boolean found = rs.next();
         rs.close();
 
@@ -504,7 +504,7 @@ public class StatementPlanDUnit extends DistributedSQLTestBase {
         log.info(e != null ? e.toString() : "null");
       }
 
-      assertEquals(42, l);
+      assertTrue(l == 42 || l == 43);
 
     } finally {
       invokeInEveryVM(new SerializableRunnable("clearing plan checker") {

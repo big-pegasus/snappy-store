@@ -23,6 +23,7 @@ import java.util.Set;
 
 import com.gemstone.gemfire.internal.cache.BucketRegion;
 import com.gemstone.gemfire.internal.cache.EntryEventImpl;
+import com.gemstone.gemfire.internal.cache.lru.LRUEntry;
 import com.gemstone.gemfire.internal.snappy.memory.MemoryManagerStats;
 
 public abstract class CallbackFactoryProvider {
@@ -52,6 +53,11 @@ public abstract class CallbackFactoryProvider {
 
     @Override
     public boolean isColumnTable(String qualifiedName) {
+      return false;
+    }
+
+    @Override
+    public boolean skipEvictionForEntry(LRUEntry entry) {
       return false;
     }
 
@@ -107,6 +113,10 @@ public abstract class CallbackFactoryProvider {
     @Override
     public void dropStorageMemory(String objectName, long ignoreBytes) {
 
+    }
+
+    @Override
+    public void waitForRuntimeManager(long maxWaitMillis) {
     }
 
     @Override

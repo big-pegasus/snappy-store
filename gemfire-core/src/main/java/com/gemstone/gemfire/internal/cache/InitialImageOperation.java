@@ -28,7 +28,6 @@ import java.io.ObjectOutput;
 import java.util.*;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.gemstone.gemfire.CancelException;
@@ -39,7 +38,6 @@ import com.gemstone.gemfire.InternalGemFireException;
 import com.gemstone.gemfire.LogWriter;
 import com.gemstone.gemfire.SystemFailure;
 import com.gemstone.gemfire.cache.DiskAccessException;
-import com.gemstone.gemfire.cache.IsolationLevel;
 import com.gemstone.gemfire.cache.RegionDestroyedException;
 import com.gemstone.gemfire.cache.TransactionDataNodeHasDepartedException;
 import com.gemstone.gemfire.cache.hdfs.internal.AbstractBucketRegionQueue;
@@ -63,7 +61,6 @@ import com.gemstone.gemfire.internal.cache.InitialImageFlowControl.FlowControlPe
 import com.gemstone.gemfire.internal.cache.ha.HAContainerWrapper;
 import com.gemstone.gemfire.internal.cache.locks.ExclusiveSharedSynchronizer;
 import com.gemstone.gemfire.internal.cache.locks.LockingPolicy;
-import com.gemstone.gemfire.internal.cache.partitioned.Bucket;
 import com.gemstone.gemfire.internal.cache.persistence.DiskStoreID;
 import com.gemstone.gemfire.internal.cache.persistence.PersistenceAdvisor;
 import com.gemstone.gemfire.internal.cache.tier.InterestType;
@@ -79,8 +76,6 @@ import com.gemstone.gemfire.internal.cache.versions.VersionStamp;
 import com.gemstone.gemfire.internal.cache.versions.VersionTag;
 import com.gemstone.gemfire.internal.cache.vmotion.VMotionObserverHolder;
 import com.gemstone.gemfire.internal.cache.wan.serial.SerialGatewaySenderImpl;
-import com.gemstone.gemfire.internal.concurrent.AI;
-import com.gemstone.gemfire.internal.concurrent.CFactory;
 import com.gemstone.gemfire.internal.i18n.LocalizedStrings;
 import com.gemstone.gemfire.internal.offheap.ByteSource;
 import com.gemstone.gemfire.internal.offheap.OffHeapHelper;
@@ -557,13 +552,20 @@ public class InitialImageOperation  {
           }
 
           int numTimesRequested = 0;
-          while(requestUnappliedDeltas(dm, recipient)) {
-            LogWriterI18n logger = this.region.getLogWriterI18n();
-            if(TRACE_GII || logger.fineEnabled()) {
-              region.getLogWriterI18n().info(LocalizedStrings.DEBUG, 
-                  "Requested the base value for unapplied deltas for region: " + 
-                  this.region + " for " + (++numTimesRequested) + " time");
+          region.writeLockEnqueueDelta();
+          try {
+            ImageState imgState = region.getImageState();
+            while (requestUnappliedDeltas(dm, recipient)) {
+              imgState.setRequestedUnappliedDelta(true);
+              LogWriterI18n logger = this.region.getLogWriterI18n();
+              if (TRACE_GII || logger.fineEnabled()) {
+                region.getLogWriterI18n().info(LocalizedStrings.DEBUG,
+                    "Requested the base value for unapplied deltas for region: " +
+                        this.region + " for " + (++numTimesRequested) + " time");
+              }
             }
+          } finally {
+            region.writeUnlockEnqueueDelta();
           }
           continue;
         } catch (InternalGemFireException ex) {
@@ -648,7 +650,6 @@ public class InitialImageOperation  {
   private boolean requestUnappliedDeltas(DistributionManager dm, InternalDistributedMember recipient) {
     ImageState imgState = region.getImageState();
     LogWriterI18n logger = region.getLogWriterI18n();
-    
     //See if there are any deltas that have not yet been merged
     Iterator<Object> deltas = imgState.getDeltaEntries();
     Set<Object> unappliedDeltas = new HashSet<Object>();
@@ -1478,7 +1479,7 @@ public class InitialImageOperation  {
     /**
      * number of outstanding executors currently in-flight on this request
      */
-    private final AI msgsBeingProcessed = CFactory.createAI();
+    private final AtomicInteger msgsBeingProcessed = new AtomicInteger();
 
     /** used to wait for processing until TXId chunk is received */
     private final StoppableCountDownLatch txIdChunkRecvLatch =
@@ -5015,11 +5016,15 @@ public class InitialImageOperation  {
     public SnapshotBucketLockReleaseMessage() {
     }
 
-    public SnapshotBucketLockReleaseMessage(String regionPath, int processorId) {
+    private SnapshotBucketLockReleaseMessage(String regionPath, int processorId) {
       this.regionPath = regionPath;
       this.processorId = processorId;
     }
 
+    @Override
+    public int getProcessorId() {
+      return this.processorId;
+    }
 
     public static void send(
         InternalDistributedMember members, DM dm, String regionPath) throws ReplyException {
@@ -5078,6 +5083,12 @@ public class InitialImageOperation  {
           replyMsg.setRecipient(getSender());
           replyMsg.setException(replyException);
           dm.putOutgoing(replyMsg);
+        } else {
+          if (logger.fineEnabled()) {
+            logger.fine("SnapshotBucketLockReleaseMessage.process done for <" +
+                this + '>');
+          }
+          ReplyMessage.send(getSender(), this.processorId, null, dm, null);
         }
       }
     }

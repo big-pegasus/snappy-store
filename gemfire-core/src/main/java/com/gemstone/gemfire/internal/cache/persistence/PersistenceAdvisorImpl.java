@@ -47,7 +47,6 @@ import com.gemstone.gemfire.internal.cache.DiskRegionStats;
 import com.gemstone.gemfire.internal.cache.GemFireCacheImpl;
 import com.gemstone.gemfire.internal.cache.GemFireCacheImpl.StaticSystemCallbacks;
 import com.gemstone.gemfire.internal.cache.ProxyBucketRegion;
-import com.gemstone.gemfire.internal.cache.partitioned.Bucket;
 import com.gemstone.gemfire.internal.cache.persistence.PersistentMemberManager.MemberRevocationListener;
 import com.gemstone.gemfire.internal.i18n.LocalizedStrings;
 import com.gemstone.gemfire.internal.process.StartupStatus;
@@ -73,6 +72,7 @@ public class PersistenceAdvisorImpl implements PersistenceAdvisor {
   private volatile boolean shouldUpdatePersistentView;
   protected volatile boolean isClosed;
   private volatile boolean holdingTieLock;
+  private volatile boolean doNotWait = false;
   
   private Set<PersistentMemberID> recoveredMembers;
   private Set<PersistentMemberID> removedMembers = new HashSet<PersistentMemberID>();
@@ -80,6 +80,7 @@ public class PersistenceAdvisorImpl implements PersistenceAdvisor {
   private volatile Set<PersistentMemberID> allMembersWaitingFor;
   private volatile Set<PersistentMemberID> offlineMembersWaitingFor;
   protected final Object lock;
+  private static PersistenceAdvisorObserver observer = null;
   
   public static final boolean TRACE = Boolean.getBoolean("gemfire.TRACE_PERSISTENCE_ADVISOR");
   
@@ -209,7 +210,12 @@ public class PersistenceAdvisorImpl implements PersistenceAdvisor {
         return PersistentMemberState.ONLINE; 
       }
     }
-    
+
+    for(PersistentMemberID offlieOrEqual: storage.getOfflineAndEqualMembers()) {
+      if(offlieOrEqual.isOlderOrEqualVersionOf(id)) {
+        return PersistentMemberState.EQUAL;
+      }
+    }
     //If we have a member that is marked as offline that
     //is a newer version of the peers id, tell them they are online
     for(PersistentMemberID offline : storage.getOfflineMembers()) {
@@ -406,10 +412,14 @@ public class PersistenceAdvisorImpl implements PersistenceAdvisor {
       //will remove that ID from the peers.
       if(initializingId != null) {
         if(traceOn()) {
-          trace(" We still have an initializing id: " + initializingId + "  Telling peers to remove the old id " + oldId + " and transitioning this initializing id to old id. recipients " + profileUpdateRecipients);
+          trace(" We still have an initializing id: " + initializingId +
+              "  Telling peers to remove the old id " +
+              oldId + " and transitioning this initializing id to old id. recipients "
+              + profileUpdateRecipients);
         }
         //TODO prpersist - clean this up
-        long viewVersion = advisor.startOperation();
+        long viewVersion = -1;
+        viewVersion = advisor.startOperation();
         try {
           PrepareNewPersistentMemberMessage.send(profileUpdateRecipients,
               dm, regionPath, oldId, initializingId);
@@ -568,7 +578,13 @@ public class PersistenceAdvisorImpl implements PersistenceAdvisor {
       }
     }
   }
-  
+
+  private void unblockMember() {
+    for(PersistentMemberID id : storage.getOnlineMembers()) {
+      storage.memberOfflineAndEqual(id);
+    }
+  }
+
   private void memberRemoved(PersistentMemberID id, boolean revoked) {
     if(traceOn()) {
       trace(" Member removed. persistentID= " + id);
@@ -714,29 +730,44 @@ public class PersistenceAdvisorImpl implements PersistenceAdvisor {
   
   public boolean checkMyStateOnMembers(Set<InternalDistributedMember> replicates) throws ReplyException {
     PersistentStateQueryResults remoteStates = getMyStateOnMembers(replicates);
+
     boolean equal = false;
+    if (observer != null) {
+      observer.observe(regionPath);
+    }
+
     for(Map.Entry<InternalDistributedMember, PersistentMemberState> entry: remoteStates.stateOnPeers.entrySet()) {
       InternalDistributedMember member = entry.getKey();
       PersistentMemberID remoteId = remoteStates.persistentIds.get(member);
-      
+      // check for same diskIds and check how old it is
+      // may print the information and if allow then go ahead with the initialization
       final PersistentMemberID myId = getPersistentID();
       PersistentMemberState stateOnPeer = entry.getValue();
-      
+
       if(PersistentMemberState.REVOKED.equals(stateOnPeer)) {
         throw new RevokedPersistentDataException(
             LocalizedStrings.PersistentMemberManager_Member_0_is_already_revoked
                 .toLocalizedString(myId));
       }
-      
-      
+
       if(myId != null && stateOnPeer == null) {
-        String message = LocalizedStrings.CreatePersistentRegionProcessor_SPLIT_DISTRIBUTED_SYSTEM
-            .toLocalizedString(regionPath, member, remoteId, myId);
-        throw new ConflictingPersistentDataException(message);
+        // This can be made as a property to make sure doesn't happen always
+        if (true) {
+          // There is nothign on remote or remote has same diskId.
+          if (remoteId == null || (remoteId.diskStoreId == myId.diskStoreId)) {
+            // continue..
+            advisor.getLogWriter().info(LocalizedStrings.DEBUG,
+                "Continuing as my DiskStoreId is same as remoteID" + member + " remoteID " + remoteId);
+          } else {
+            String message = LocalizedStrings.CreatePersistentRegionProcessor_SPLIT_DISTRIBUTED_SYSTEM
+                .toLocalizedString(regionPath, member, remoteId, myId);
+            throw new ConflictingPersistentDataException(message);
+          }
+        }
       }
       if(myId != null && stateOnPeer == PersistentMemberState.EQUAL) {
           equal = true;
-        }
+      }
       
       //TODO prpersist - This check might not help much. The other member changes it's ID when it
       //comes back online.
@@ -754,7 +785,8 @@ public class PersistenceAdvisorImpl implements PersistenceAdvisor {
   
   public void finishPendingDestroy() {
   //send a message to peers indicating that they should remove this profile
-    long viewVersion = advisor.startOperation();
+    long viewVersion = -1;
+    viewVersion = advisor.startOperation();
     try {
       if(logger.infoEnabled()) {
         advisor.getLogWriter().info(LocalizedStrings.DEBUG, "The advisee is " + advisor.getAdvisee());
@@ -873,6 +905,9 @@ public class PersistenceAdvisorImpl implements PersistenceAdvisor {
         }
       }
     } finally {
+      if(traceOn()) {
+        trace("Wait over. Going ahead." );
+      }
       advisor.removeMembershipAndProxyListener(listener);
       removeListener(listener);
     }
@@ -1125,26 +1160,25 @@ public class PersistenceAdvisorImpl implements PersistenceAdvisor {
       long waitThreshold = advisor.getDistributionManager().getConfig().getAckWaitThreshold();
       // reduce the first log time from 15secs so that higher layers can report
       // sooner to user
-      if (waitThreshold > 1) {
-        waitThreshold = waitThreshold / 2;
+      if (waitThreshold >= 5) {
+        waitThreshold = waitThreshold / 5;
       }
       long warningTime = System.nanoTime() + TimeUnit.SECONDS.toNanos(waitThreshold);
       boolean warned = false;
       synchronized(this) {
         try {
           setWaitingOnMembers(allMembersToWaitFor, offlineMembersToWaitFor);
-          while(!membershipChanged && !isClosed) {
+          while(!membershipChanged && !isClosed && !doNotWait) {
             checkInterruptedByShutdownAll();
             advisor.getAdvisee().getCancelCriterion().checkCancelInProgress(null);
             this.wait(100);
             if(!warned && System.nanoTime() > warningTime) {
-              
               logWaitingForMember(allMembersToWaitFor, offlineMembersToWaitFor);
-              
               warned=true;
             }
           }
           this.membershipChanged = false;
+          doNotWait = false;
         } finally {
           setWaitingOnMembers(null, null);
           // also notify GemFireXD layer that wait has ended
@@ -1247,6 +1281,12 @@ public class PersistenceAdvisorImpl implements PersistenceAdvisor {
         localData.add(id);
       }
     }
+
+    @Override
+    public void unblock() {
+      doNotWait = true;
+      unblockMember();
+    }
   }
 
   public void close() {
@@ -1287,5 +1327,14 @@ public class PersistenceAdvisorImpl implements PersistenceAdvisor {
   
   public boolean isOnline() {
     return online;
+  }
+
+  public static interface PersistenceAdvisorObserver {
+    default public void observe(String regionPath) {
+    }
+  }
+
+  public static void setPersistenceAdvisorObserver(PersistenceAdvisorObserver o) {
+     observer = o;
   }
 }

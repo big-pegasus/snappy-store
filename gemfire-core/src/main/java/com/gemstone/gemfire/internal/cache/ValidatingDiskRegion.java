@@ -336,7 +336,8 @@ public class ValidatingDiskRegion extends DiskRegion implements DiskRecoveryStor
       return false;
     }
     @Override
-    public boolean isOverflowedToDisk(LocalRegion r, DiskPosition dp) {
+    public boolean isOverflowedToDisk(LocalRegion r, DiskPosition dp,
+        boolean alwaysFetchPosition) {
       // TODO Auto-generated method stub
       return false;
     }
@@ -354,11 +355,6 @@ public class ValidatingDiskRegion extends DiskRegion implements DiskRecoveryStor
     public void setValueWithTombstoneCheck(Object value, EntryEvent event)
         throws RegionClearedException {
       // TODO Auto-generated method stub
-    }
-    @Override
-    public Object getTransformedValue() {
-      // TODO Auto-generated method stub
-      return null;
     }
     @Override
     public Object getValueInVM(RegionEntryContext context) {

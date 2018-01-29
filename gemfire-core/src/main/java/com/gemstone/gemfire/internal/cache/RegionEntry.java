@@ -239,7 +239,8 @@ public interface RegionEntry extends ExclusiveSharedLockObject {
    * Returns true if this entry has overflowed to disk.
    * @param dp if overflowed then the position of the value is set in dp
    */
-  public boolean isOverflowedToDisk(LocalRegion r, DistributedRegion.DiskPosition dp);
+  public boolean isOverflowedToDisk(LocalRegion r,
+      DistributedRegion.DiskPosition dp, boolean alwaysFetchPosition);
 
   /**
    * Gets the key for this entry.
@@ -313,16 +314,7 @@ public interface RegionEntry extends ExclusiveSharedLockObject {
    * @throws RegionClearedException thrown if the region is concurrently cleared
    */
   public void setValueWithTombstoneCheck(@Unretained Object value, EntryEvent event) throws RegionClearedException;
-  
-  /**
-   * Returns the value as stored by the RegionEntry implementation.  For instance, if compressed this
-   * value would be the compressed form.
-   *  
-   * @since 7.5
-   */
-  @Retained
-  public Object getTransformedValue();
-  
+
   /**
    * Returns the value of an entry as it resides in the VM.
    * @return the value or EntryEvent.NOT_AVAILABLE token if it's not in
@@ -428,7 +420,8 @@ public interface RegionEntry extends ExclusiveSharedLockObject {
 
   /**
    * Get the value in region or disk without faultin in raw form without any
-   * change in storage format (SnappyData off-heap will return off-heap buffer).
+   * change in storage format (SnappyData off-heap will return off-heap
+   *   buffer with a retain so caller should do a release once done).
    */
   @Retained
   public Object getValueInVMOrDiskWithoutFaultIn(LocalRegion owner);

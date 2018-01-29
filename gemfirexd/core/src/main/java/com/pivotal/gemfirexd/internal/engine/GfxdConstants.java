@@ -21,7 +21,7 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
 
-import com.gemstone.gemfire.internal.cache.CacheServerLauncher;
+import com.gemstone.gemfire.internal.shared.LauncherBase;
 import com.pivotal.gemfirexd.Attribute;
 import com.pivotal.gemfirexd.internal.iapi.reference.Property;
 import com.pivotal.gemfirexd.internal.iapi.services.property.PropertyUtil;
@@ -50,6 +50,8 @@ public interface GfxdConstants {
 
   final String GFXD_PREFIX = PropertyUtil.isSQLFire ? Attribute.SQLF_PREFIX
       : Attribute.GFXD_PREFIX;
+
+  String SNAPPY_PREFIX = "snappydata.";
 
   /** property name for schema name */
   final String PROPERTY_SCHEMA_NAME = GFXD_PREFIX + "schema-name";
@@ -332,7 +334,28 @@ public interface GfxdConstants {
 
   /** Name of disk store used by global indexes */ 
   final String GFXD_GLOBALINDEX_DISKSTORE_NAME ="GFXD-GLOBALINDEX-DISKSTORE";
-  
+
+  /**
+   * Name of default disk store used by snappydata's delta regions.
+   */
+  final String SNAPPY_DEFAULT_DELTA_DISKSTORE = "SNAPPY-INTERNAL-DELTA";
+
+  /**
+   * Suffix of disk store used by snappydata's delta regions
+   * (appended to main diskstore name except for default diskstore).
+   */
+  final String SNAPPY_DELTA_DISKSTORE_SUFFIX = "-SNAPPY-DELTA";
+
+  /**
+   * default sub-directory to use for delta store
+   */
+  final String SNAPPY_DELTA_SUBDIR = "snappy-internal-delta";
+
+  /**
+   * maximum size of each oplog file used for delta disk stores
+   */
+  final int SNAPPY_DELTA_DISKSTORE_SIZEMB = 50;
+
   /** Name of meta-region used to store the max identity column value */ 
   final String IDENTITY_REGION_NAME ="__IDENTITYREGION2";
 
@@ -455,7 +478,7 @@ public interface GfxdConstants {
           Attribute.SYS_HDFS_ROOT_DIR,
           Attribute.TABLE_DEFAULT_PARTITIONED,
           com.pivotal.gemfirexd.internal.iapi.reference.Attribute.COLLATE,
-          com.pivotal.gemfirexd.internal.iapi.reference.Attribute.INTERNAL_CONNECTION,
+          Attribute.INTERNAL_CONNECTION,
           Attribute.COLLATION,
           Attribute.CREATE_ATTR,
           Attribute.DISABLE_STREAMING,
@@ -482,10 +505,10 @@ public interface GfxdConstants {
           Property.HADOOP_IS_GFXD_LONER,
           Property.GFXD_HD_HOMEDIR,
           Property.GFXD_HD_NAMENODEURL,
-          CacheServerLauncher.CRITICAL_HEAP_PERCENTAGE,
-          CacheServerLauncher.EVICTION_HEAP_PERCENTAGE,
-          CacheServerLauncher.CRITICAL_OFF_HEAP_PERCENTAGE,
-          CacheServerLauncher.EVICTION_OFF_HEAP_PERCENTAGE,
+          LauncherBase.CRITICAL_HEAP_PERCENTAGE,
+          LauncherBase.EVICTION_HEAP_PERCENTAGE,
+          LauncherBase.CRITICAL_OFF_HEAP_PERCENTAGE,
+          LauncherBase.EVICTION_OFF_HEAP_PERCENTAGE,
           Attribute.THRIFT_USE_BINARY_PROTOCOL,
           Attribute.THRIFT_USE_FRAMED_TRANSPORT,
           Attribute.THRIFT_USE_SSL,
@@ -810,8 +833,6 @@ public interface GfxdConstants {
 
 //  public static final String GFXD_COST_OPTIMIZED_ROUTING_THRESHOLD =
 //      GFXD_PREFIX +"cost-optimized-routing-threshold";
-
-  int SNAPPY_MIN_COLUMN_DELTA_ROWS = 200;
 
   // --------------------- Defaults for GFXD connection/transaction props
 

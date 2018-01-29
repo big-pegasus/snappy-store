@@ -53,16 +53,17 @@ import java.util.Set;
 // GemStone changes BEGIN
 import java.util.Properties;
 
+import com.gemstone.gemfire.LogWriter;
 import com.gemstone.gemfire.cache.Region;
 import com.gemstone.gemfire.cache.TransactionFlag;
 import com.gemstone.gemfire.distributed.internal.DistributionManager;
 import com.gemstone.gemfire.internal.cache.Checkpoint;
+import com.gemstone.gemfire.internal.cache.GemFireCacheImpl;
 import com.gemstone.gemfire.internal.cache.TXState;
 import com.gemstone.gemfire.internal.cache.wan.GatewaySenderEventCallbackArgument;
 import com.gemstone.gnu.trove.THashMap;
 import com.pivotal.gemfirexd.Attribute;
 import com.pivotal.gemfirexd.internal.engine.GfxdConstants;
-import com.pivotal.gemfirexd.internal.engine.Misc;
 import com.pivotal.gemfirexd.internal.engine.access.GemFireTransaction;
 import com.pivotal.gemfirexd.internal.engine.access.MemConglomerate;
 import com.pivotal.gemfirexd.internal.engine.distributed.utils.GemFireXDUtils;
@@ -488,12 +489,14 @@ public final class GenericLanguageConnectionContext
         if (cachedInitialDefaultSchemaDescr == null) {
             DataDictionary dd = getDataDictionary();
             String authorizationId = getAuthorizationId();
+			String defaultSchema = authorizationId.replace('-', '_');
             SchemaDescriptor sd =
                 dd.getSchemaDescriptor(
-                    authorizationId, getTransactionCompile(), false);
+                    defaultSchema, getTransactionCompile(), false);
+
             if (sd == null) {
                 sd = new SchemaDescriptor(
-                    dd, authorizationId, authorizationId, (UUID)null, false);
+                    dd, defaultSchema, authorizationId, (UUID)null, false);
             }
             cachedInitialDefaultSchemaDescr = sd;
         }
@@ -4075,22 +4078,22 @@ public final class GenericLanguageConnectionContext
 		}
 	}
       
-        /** @see LanguageConnectionContext#getExplainConnection() */
+        @Override
         public final boolean explainConnection() {
           return explainConnection;
         }
       
-        /** @see LanguageConnectionContext#setExplainConnectionMode(boolean) */
+        @Override
         public final void setExplainConnection(final boolean onOrOff) {
           explainConnection = onOrOff;
         }
       
-        /** @see LanguageConnectionContext#getExplainSchema() */
+        @Override
         public final boolean getExplainSchema() {
           return create_explain_schema_objects;
         }
       
-        /** @see LanguageConnectionContext#setExplainSchema(String) */
+        @Override
         public void setExplainSchema(boolean s) {
           create_explain_schema_objects = s;
         }
@@ -4152,12 +4155,14 @@ public final class GenericLanguageConnectionContext
 
 	private static final int SNAPPY_INTERNAL_CONNECTION = 0x10000;
 
-  private static final int FLAGS_DEFAULT = 0x0;
+	private static final int METASTORE_IN_DD = 0x20000;
+
+	private static final int FLAGS_DEFAULT = METASTORE_IN_DD;
 
   /** flags that cannot be changed via {@link #setFlags(int)} */
   private static final int FLAGS_IMMUTABLE = CONNECTION_REMOTE
       | CONNECTION_REMOTE_DDL | SKIP_LOCKS | POS_DUP_FN
-      | ENABLE_STREAMING | SKIP_LISTENERS;
+      | ENABLE_STREAMING | SKIP_LISTENERS | METASTORE_IN_DD;
 
   private int gfxdFlags = FLAGS_DEFAULT;
 
@@ -4491,6 +4496,7 @@ public final class GenericLanguageConnectionContext
     return connFactory.getStatement(getDefaultSchema(), sqlText, execFlags,false, null);
   }
 
+	@Override
 	public void setBucketRetentionForLocalExecution(boolean bucketRetentionForLocalExecution) {
 		this.gfxdFlags = GemFireXDUtils.set(this.gfxdFlags, BUCKET_RETENTION_FOR_LOCAL_EXECUTION,
 				bucketRetentionForLocalExecution);
@@ -4748,7 +4754,7 @@ public final class GenericLanguageConnectionContext
    * Default QueryTimeOut of the statement/preparedStatement that is being
    * created via nestedConnection.
    * 
-   * @see EmbedConnection#defaultQueryTimeOutMillis
+   * @see EmbedConnection#defaultNestedConnQueryTimeOutMillis
    */
   private long lastStatementQueryTimeOutMillis = 0L;
   
@@ -4879,7 +4885,7 @@ public final class GenericLanguageConnectionContext
   private void forceSetExecuteLocally(Set<Integer> bucketIds, Region<?, ?> region,
       boolean dbSync, Checkpoint cp) {
 
-    if (SanityManager.TraceSingleHop) {
+    if (GemFireXDUtils.TraceQuery || SanityManager.TraceSingleHop) {
       SanityManager.DEBUG_PRINT(SanityManager.TRACE_SINGLE_HOP,
           "GenericLanguageConnectionContext::"
               + "setExecuteLocally setting bucketSet in lcc: " + this + " to: "
@@ -5017,6 +5023,16 @@ public final class GenericLanguageConnectionContext
 	@Override
 	public boolean isDefaultPersistent() {
 		return GemFireXDUtils.isSet(this.gfxdFlags, DEFAULT_PERSISTENT);
+	}
+
+	@Override
+	public void setPersistMetaStoreInDataDictionary(boolean b) {
+		this.gfxdFlags = GemFireXDUtils.set(this.gfxdFlags, METASTORE_IN_DD, b);
+	}
+
+	@Override
+	public boolean isPersistMetaStoreInDataDictionary() {
+		return GemFireXDUtils.isSet(this.gfxdFlags, METASTORE_IN_DD);
 	}
 
   /**

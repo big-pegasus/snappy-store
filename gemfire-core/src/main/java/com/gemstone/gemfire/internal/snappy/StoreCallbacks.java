@@ -22,17 +22,13 @@ import java.util.Set;
 
 import com.gemstone.gemfire.internal.cache.BucketRegion;
 import com.gemstone.gemfire.internal.cache.EntryEventImpl;
+import com.gemstone.gemfire.internal.cache.lru.LRUEntry;
+import com.gemstone.gemfire.internal.shared.SystemProperties;
 import com.gemstone.gemfire.internal.snappy.memory.MemoryManagerStats;
 
 public interface StoreCallbacks {
 
-  String SHADOW_SCHEMA_NAME = "SNAPPYSYS_INTERNAL";
-
-  String SHADOW_TABLE_SUFFIX = "_COLUMN_STORE_";
-
-  String SHADOW_SCHEMA_SEPARATOR = "____";
-
-  String SHADOW_SCHEMA_NAME_WITH_SEPARATOR = SHADOW_SCHEMA_NAME + SHADOW_SCHEMA_SEPARATOR;
+  String SHADOW_TABLE_SUFFIX = SystemProperties.SHADOW_TABLE_SUFFIX;
 
   void registerTypes();
 
@@ -44,6 +40,8 @@ public interface StoreCallbacks {
   List<String> getInternalTableSchemas();
 
   boolean isColumnTable(String qualifiedName);
+
+  boolean skipEvictionForEntry(LRUEntry entry);
 
   int getHashCodeSnappy(Object dvd, int numPartitions);
 
@@ -79,6 +77,9 @@ public interface StoreCallbacks {
   void releaseStorageMemory(String objectName, long numBytes, boolean offHeap);
 
   void dropStorageMemory(String objectName, long ignoreBytes);
+
+  /** wait for runtime manager to initialize and get set in callbacks */
+  void waitForRuntimeManager(long maxWaitMillis);
 
   boolean isSnappyStore();
 

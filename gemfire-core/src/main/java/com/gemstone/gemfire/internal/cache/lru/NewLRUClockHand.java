@@ -17,7 +17,7 @@
 
 package com.gemstone.gemfire.internal.cache.lru;
 
-import java.util.concurrent.locks.LockSupport;
+import java.util.List;
 
 import com.gemstone.gemfire.StatisticsFactory;
 import com.gemstone.gemfire.cache.Region;
@@ -31,7 +31,6 @@ import com.gemstone.gemfire.internal.cache.locks.ExclusiveSharedSynchronizer;
 import com.gemstone.gemfire.internal.cache.PlaceHolderDiskRegion;
 import com.gemstone.gemfire.internal.cache.versions.RegionVersionVector;
 import com.gemstone.gemfire.internal.shared.unsafe.UnsafeHolder;
-import com.gemstone.gemfire.internal.snappy.CallbackFactoryProvider;
 
 
 /**
@@ -61,9 +60,6 @@ public static final boolean debug = Boolean.getBoolean("gemfire.verbose-lru-cloc
 public static LogWriterI18n logWriter;
 
 static private final int maxEntries;
-
-private boolean snappyStore =
-    CallbackFactoryProvider.getStoreCallbacks().isSnappyStore();
 
 static {
   String squelch = System.getProperty("gemfire.lru.maxSearchEntries");
@@ -223,18 +219,20 @@ public NewLRUClockHand(Object region, EnableLRU ccHelper,
     * be in the pipe (unless it is the last empty marker).
     */
   public LRUClockNode getLRUEntry() {
-    return getLRUEntry(false);
+    return getLRUEntry(null);
   }
 
   /**
    * Return the Entry that is considered least recently used. The entry will no longer
    * be in the pipe (unless it is the last empty marker).
    *
-   * @param skipLockedEntries if true then skip any locked entries and return
+   * @param skipLockedEntries if non-null then skip any locked entries and return
    *                          with unreleased monitor lock on entry that caller
-   *                          is required to release using Unsafe API (SNAP-2012)
+   *                          is required to release using Unsafe API (SNAP-2012);
+   *                          the provided list will contain the entries that were
+   *                          skipped and must be put back into the LRU list
    */
-  public LRUClockNode getLRUEntry(boolean skipLockedEntries) {
+  public LRUClockNode getLRUEntry(List<LRUClockNode> skipLockedEntries) {
     long numEvals = 0;
     
     for (;;) {
@@ -260,33 +258,19 @@ public NewLRUClockHand(Object region, EnableLRU ccHelper,
           logWriter.info(LocalizedStrings
               .NewLRUClockHand_REMOVING_TRANSACTIONAL_ENTRY_FROM_CONSIDERATION);
         }
+        appendEntry(aNode);
         continue;
       }
 
-      // Checking whether this entry is outside lock ,
-      // so that we won;t attempt to evict an entry whose
-      // faultIn is in process
-      // TODO Remove SnappyStore check after 0.9 . Added this check to
-      // reduce regression cycles
-      if (snappyStore && (aNode.isValueNull()|| aNode.testEvicted())) {
-        if (debug) {
-          logWriter
-              .info(LocalizedStrings.NewLRUClockHand_DISCARDING_EVICTED_ENTRY);
-        }
-        continue;
-      }
       boolean success = false;
       // if required skip a locked entry and keep the lock (caller should release)
-      if (skipLockedEntries) {
-        if (!UnsafeHolder.getUnsafe().tryMonitorEnter(aNode)) {
-          // try once more after a small wait
-          LockSupport.parkNanos(10000L);
-          if (!UnsafeHolder.getUnsafe().tryMonitorEnter(aNode)) {
-            continue;
-          }
+      if (skipLockedEntries != null) {
+        if (!UnsafeHolder.tryMonitorEnter(aNode, false)) {
+          skipLockedEntries.add(aNode);
+          continue;
         }
       } else {
-        UnsafeHolder.getUnsafe().monitorEnter(aNode);
+        UnsafeHolder.monitorEnter(aNode);
       }
       // If this Entry is part of a transaction, skip it since
       // eviction should not cause commit conflicts
@@ -324,8 +308,8 @@ public NewLRUClockHand(Object region, EnableLRU ccHelper,
         success = true;
         return aNode;
       } finally { // synchronized
-        if (!success || !skipLockedEntries) {
-          UnsafeHolder.getUnsafe().monitorExit(aNode);
+        if (!success || skipLockedEntries == null) {
+          UnsafeHolder.monitorExit(aNode);
         }
       }
     } // for
