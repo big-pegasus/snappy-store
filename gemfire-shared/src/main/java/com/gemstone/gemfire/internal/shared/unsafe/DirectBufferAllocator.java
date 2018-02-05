@@ -21,6 +21,7 @@ import java.nio.ByteBuffer;
 import java.util.function.BiConsumer;
 
 import com.gemstone.gemfire.internal.shared.BufferAllocator;
+import org.apache.spark.unsafe.memory.MemoryAllocator;
 
 /**
  * Generic implementation of {@link BufferAllocator} for direct ByteBuffers
@@ -78,19 +79,23 @@ public class DirectBufferAllocator extends BufferAllocator {
 
   @Override
   public ByteBuffer allocate(int size, String owner) {
-    return ByteBuffer.allocateDirect(size);
+    return allocateForStorage(size);
   }
 
   @Override
   public ByteBuffer allocateForStorage(int size) {
-    return ByteBuffer.allocateDirect(size);
+    ByteBuffer buffer = ByteBuffer.allocateDirect(size);
+    if (MemoryAllocator.MEMORY_DEBUG_FILL_ENABLED) {
+      fill(buffer, MemoryAllocator.MEMORY_DEBUG_FILL_CLEAN_VALUE);
+    }
+    return buffer;
   }
 
   @Override
   public void clearPostAllocate(ByteBuffer buffer) {
     // clear till the capacity and not limit since former will be a factor
     // of 8 and hence more efficient in Unsafe.setMemory
-    clearBuffer(buffer, 0, buffer.capacity());
+    fill(buffer, (byte)0, 0, buffer.capacity());
   }
 
   @Override
@@ -116,6 +121,12 @@ public class DirectBufferAllocator extends BufferAllocator {
       newBuffer.put(buffer);
       UnsafeHolder.releaseDirectBuffer(buffer);
       newBuffer.rewind(); // position at start as per the contract of expand
+      if (MemoryAllocator.MEMORY_DEBUG_FILL_ENABLED) {
+        // fill the remaining bytes
+        ByteBuffer buf = newBuffer.duplicate();
+        buf.position(currentUsed);
+        fill(buf, MemoryAllocator.MEMORY_DEBUG_FILL_CLEAN_VALUE);
+      }
       return newBuffer;
     } else {
       buffer.limit(currentUsed + required);
@@ -143,6 +154,10 @@ public class DirectBufferAllocator extends BufferAllocator {
 
   @Override
   public void release(ByteBuffer buffer) {
+    if (MemoryAllocator.MEMORY_DEBUG_FILL_ENABLED) {
+      buffer.rewind();
+      fill(buffer, MemoryAllocator.MEMORY_DEBUG_FILL_FREED_VALUE);
+    }
     // reserved bytes will be decremented via FreeMemory implementations
     UnsafeHolder.releaseDirectBuffer(buffer);
   }
