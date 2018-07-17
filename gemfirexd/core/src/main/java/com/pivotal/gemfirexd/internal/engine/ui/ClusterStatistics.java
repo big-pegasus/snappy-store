@@ -38,6 +38,8 @@ public class ClusterStatistics {
     private static final ClusterStatistics INSTANCE = new ClusterStatistics();
   }
 
+  private int totalCPUCores = 0;
+
   private final CircularFifoBuffer timeLine =
       new CircularFifoBuffer(MAX_SAMPLE_SIZE);
   private final CircularFifoBuffer cpuUsageTrend =
@@ -90,18 +92,28 @@ public class ClusterStatistics {
     long sumAggrMemoryUsed;
     long sumDiskStoreDiskSpace = 0;
 
-    Set<String> hostsList = new HashSet<>();
+    Set<String> hostsListForCPUUsage = new HashSet<>();
+    Set<String> hostsListForCPUCores = new HashSet<>();
     int totalCpuActive = 0;
     int cpuCount = 0;
+
+    totalCPUCores = 0;
 
     for (MemberStatistics ms : memberStatsMap.values()) {
 
       lastMemberUpdatedTime = ms.getLastUpdatedOn();
 
-      // CPU Usage
       String host = ms.getHost();
-      if (!hostsList.contains(host) && !ms.isLocator()) {
-        hostsList.add(host);
+
+      // CPU cores
+      if(!hostsListForCPUCores.contains(host)){
+        hostsListForCPUCores.add(host);
+        this.totalCPUCores += ms.getCores();
+      }
+
+      // CPU Usage
+      if (!hostsListForCPUUsage.contains(host) && !ms.isLocator()) {
+        hostsListForCPUUsage.add(host);
         totalCpuActive += ms.getCpuActive();
         cpuCount++;
       }
@@ -171,6 +183,10 @@ public class ClusterStatistics {
           SnappyUtils.bytesToGivenUnits(sumDiskStoreDiskSpace, SnappyUtils.STORAGE_SIZE_UNIT_GB));
     }
 
+  }
+
+  public int getTotalCPUCores() {
+    return totalCPUCores;
   }
 
   public Object[] getUsageTrends(int trendType) {
