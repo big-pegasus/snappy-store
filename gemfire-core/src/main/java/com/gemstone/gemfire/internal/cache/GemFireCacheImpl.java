@@ -449,9 +449,6 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
 
   private TombstoneService tombstoneService;
 
-  private Map<Region,RegionVersionVector> snapshotRVV = new ConcurrentHashMap<Region,RegionVersionVector>();
-
-  private final ReentrantReadWriteLock snapshotLock = new ReentrantReadWriteLock();
   private final ReentrantReadWriteLock lockForSnapshotRvv = new ReentrantReadWriteLock();
 
   private volatile RvvSnapshotTestHook testHook;
@@ -1564,17 +1561,18 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
             // if null then create the rvv for that bucket!
             // For Initialization case, so that we have all the data before snapshot.
             br.waitForData();
-            snapshot.put(br.getFullPath(),
+            snapshot.justPut(br.getFullPath(),
                 br.getVersionVector().getSnapShotOfMemberVersion());
           }
         } else if (region.getVersionVector() != null) {
           // if null then create the rvv for that region!
           // For Initialization case, so that we have all the data before snapshot.
           region.waitForData();
-          snapshot.put(region.getFullPath(),
+          snapshot.justPut(region.getFullPath(),
               region.getVersionVector().getSnapShotOfMemberVersion());
         }
       });
+      // getLogger().info("SW:1: acquired snapshot " + snapshot);
       return snapshot;
     } finally {
       lockForSnapshotRvv.readLock().unlock();
@@ -1672,14 +1670,6 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
 
   public void releaseWriteLockOnSnapshotRvv() {
     lockForSnapshotRvv.writeLock().unlock();
-  }
-
-  public void lockForSnapshot() {
-    this.snapshotLock.writeLock().lock();
-  }
-
-  public void releaseSnapshotLocks() {
-    this.snapshotLock.writeLock().unlock();
   }
 
   protected final class Stopper extends CancelCriterion {
@@ -5795,7 +5785,7 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
    */
   public static interface StaticSystemCallbacks extends
       SystemProperties.Callbacks {
-    
+
     /**
      * Log in-memory until the buffer is full, instead of file io
      * synchronization. This is mainly used in the GemFire code that invokes

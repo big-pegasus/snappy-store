@@ -520,6 +520,8 @@ struct StatementAttrs {
  21: optional i32                                          metadataVersion
  // snapshot TXId to be used for current statement (to apply across connections)
  22: optional string                                       snapshotTransactionId
+ // column table updates/deletes can use this as the owner for bucket read locks
+ 23: optional string                                       lockOwner
 }
 
 union ColumnValue {

@@ -17,6 +17,27 @@
 
 package com.gemstone.gemfire.internal.cache;
 
+import java.io.PrintWriter;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
+import javax.transaction.Transaction;
+
+import com.gemstone.gemfire.CancelCriterion;
+import com.gemstone.gemfire.GemFireException;
+import com.gemstone.gemfire.SystemFailure;
+import com.gemstone.gemfire.cache.*;
+import com.gemstone.gemfire.distributed.TXManagerCancelledException;
+import com.gemstone.gemfire.distributed.internal.DM;
+import com.gemstone.gemfire.distributed.internal.DistributionManager;
+import com.gemstone.gemfire.distributed.internal.InternalDistributedSystem;
+import com.gemstone.gemfire.distributed.internal.MembershipListener;
+import com.gemstone.gemfire.distributed.internal.OrderedMembershipListener;
+import com.gemstone.gemfire.distributed.internal.ReplyException;
+import com.gemstone.gemfire.distributed.internal.membership.InternalDistributedMember;
 import com.gemstone.gemfire.i18n.LogWriterI18n;
 import com.gemstone.gemfire.internal.SystemTimer.SystemTimerTask;
 import com.gemstone.gemfire.internal.cache.TXRemoteCommitMessage.CommitResponse;
@@ -33,40 +54,8 @@ import com.gemstone.gemfire.internal.concurrent.MapResult;
 import com.gemstone.gemfire.internal.i18n.LocalizedStrings;
 import com.gemstone.gemfire.internal.shared.ClientSharedUtils;
 import com.gemstone.gemfire.internal.shared.SystemProperties;
-import com.gemstone.gemfire.cache.*;
-import com.gemstone.gemfire.CancelCriterion;
-import com.gemstone.gemfire.GemFireException;
-import com.gemstone.gemfire.SystemFailure;
-import com.gemstone.gemfire.distributed.TXManagerCancelledException;
-import com.gemstone.gemfire.distributed.internal.DM;
-import com.gemstone.gemfire.distributed.internal.DistributionManager;
-import com.gemstone.gemfire.distributed.internal.InternalDistributedSystem;
-import com.gemstone.gemfire.distributed.internal.MembershipListener;
-import com.gemstone.gemfire.distributed.internal.OrderedMembershipListener;
-import com.gemstone.gemfire.distributed.internal.ReplyException;
-import com.gemstone.gemfire.distributed.internal.membership.*;
-import com.gemstone.gnu.trove.TObjectIntHashMap;
-
-import java.io.PrintWriter;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.ConcurrentModificationException;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.WeakHashMap;
-import java.util.Queue;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.LockSupport;
-
-import javax.transaction.Transaction;
+import io.snappydata.collection.ObjectLongHashMap;
+import io.snappydata.collection.ObjectObjectHashMap;
 
 /**
  * <p>
@@ -397,9 +386,10 @@ public final class TXManagerImpl implements CacheTransactionManager,
      * transaction has been rolled back then it returns negative of the ordering
      * to indicate so.
      */
-    TObjectIntHashMap getTXCommitOrders(Collection<TXId> txIds) {
+    ObjectLongHashMap<TXId> getTXCommitOrders(Collection<TXId> txIds) {
       final HashMap<TXId, TXId> txIdSet = new HashMap<TXId, TXId>(txIds.size());
-      final TObjectIntHashMap txIdOrders = new TObjectIntHashMap();
+      final ObjectLongHashMap<TXId> txIdOrders =
+          ObjectLongHashMap.withExpectedSize(16);
       for (TXId txId : txIds) {
         txIdSet.put(txId, txId);
       }
@@ -409,7 +399,7 @@ public final class TXManagerImpl implements CacheTransactionManager,
         final TXFinished head = this.tail.next;
         TXFinished next = head;
         TXId txId;
-        int pos = 1;
+        long pos = 1;
         while ((next = next.next) != head) {
           lookupId.memberId = next.txMemberId;
           lookupId.uniqId = next.txUniqId;
@@ -1412,7 +1402,8 @@ public final class TXManagerImpl implements CacheTransactionManager,
         final TXRegionState[] txrs = tx.getTXRegionStatesSnap();
         for (TXRegionState txr : txrs) {
           if (txr != null) {
-            THashMapWithCreate entryMods = txr.getInternalEntryMap();
+            ObjectObjectHashMap<Object, Object> entryMods =
+                txr.getInternalEntryMap();
             for (Object obj : entryMods.values()) {
               if (obj instanceof TXEntryState) {
                 TXEntryState txe = (TXEntryState) obj;

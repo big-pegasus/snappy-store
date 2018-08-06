@@ -117,8 +117,8 @@ import com.gemstone.gemfire.internal.shared.Version;
 import com.gemstone.gemfire.internal.util.ArraySortedCollection;
 import com.gemstone.gemfire.internal.util.concurrent.StoppableCountDownLatch;
 import com.gemstone.gnu.trove.TObjectIntProcedure;
-import com.gemstone.gnu.trove.TObjectObjectProcedure;
 import com.gemstone.org.jgroups.util.StringId;
+import io.snappydata.collection.ObjectObjectHashMap;
 
 /**
  * 
@@ -1276,7 +1276,8 @@ public class DistributedRegion extends LocalRegion implements
    * to constraint violations for replicated tables which should also be skipped
    * on destination
    */
-  private final THashMapWithCreate failedEvents = new THashMapWithCreate();
+  private final ObjectObjectHashMap<InternalDistributedMember, ArrayList<EventID>>
+      failedEvents = ObjectObjectHashMap.withExpectedSize(16);
 
   private ConcurrentParallelGatewaySenderQueue hdfsQueue;
 
@@ -1794,7 +1795,7 @@ public class DistributedRegion extends LocalRegion implements
           final TXManagerImpl txMgr = getCache().getCacheTransactionManager();
           for (TXRegionState txrs : orderedTXRegionState) {
             TXState txState = txrs.getTXState();
-            int txOrder = 0;
+            long txOrder = 0;
             getLogWriterI18n().info(LocalizedStrings.DEBUG, "Locking txState = " + txState);
             txState.lockTXState();
             if (txState.isInProgress() && (txOrder = is.getFinishedTXOrder(
@@ -1823,8 +1824,8 @@ public class DistributedRegion extends LocalRegion implements
               Arrays.sort(finishedTXRS, new Comparator<TXRegionState>() {
                 @Override
                 public int compare(TXRegionState t1, TXRegionState t2) {
-                  final int o1 = t1.getFinishOrder();
-                  final int o2 = t2.getFinishOrder();
+                  final long o1 = t1.getFinishOrder();
+                  final long o2 = t2.getFinishOrder();
                   return (o1 < o2) ? -1 : ((o1 == o2) ? 0 : 1);
                 }
               });
@@ -2808,16 +2809,11 @@ public class DistributedRegion extends LocalRegion implements
     // we don't care much about perf of failed events but for correctness
     // hence a sync on the entire map
     synchronized (this.failedEvents) {
-      this.failedEvents.forEachEntry(new TObjectObjectProcedure() {
-        @Override
-        public boolean execute(Object a, Object b) {
-          @SuppressWarnings("unchecked")
-          ArrayList<EventID> failures = (ArrayList<EventID>)b;
-          synchronized (failures) {
-            failures.add(eventId);
-          }
-          return true;
+      this.failedEvents.forEachWhile((m, failures) -> {
+        synchronized (failures) {
+          failures.add(eventId);
         }
+        return true;
       });
     }
   }
@@ -2852,9 +2848,7 @@ public class DistributedRegion extends LocalRegion implements
       return null;
     }
     synchronized (this.failedEvents) {
-      @SuppressWarnings("unchecked")
-      ArrayList<EventID> events = (ArrayList<EventID>)this.failedEvents
-          .get(member);
+      ArrayList<EventID> events = this.failedEvents.get(member);
       return events != null && !events.isEmpty() ? new ArrayList<EventID>(
           events) : null;
     }
@@ -3667,7 +3661,8 @@ public class DistributedRegion extends LocalRegion implements
             }
           }
           RegionEntry re = (RegionEntry)this.it.next();
-          if (re.isOverflowedToDisk(this.region, dp, false)) {
+          if (re.isValueNull() &&
+              re.isOverflowedToDisk(this.region, dp, false)) {
             // add dp to sorted list
             // avoid create DiskPage everytime for lookup
             // TODO: SW: Can reduce the intermediate memory and boost

@@ -3169,12 +3169,7 @@ public class LocalRegion extends AbstractRegion
     if (!includeHDFSResults) {
       result -= this.txLockCreateCount.get();
     }
-    if (result > 0) {
-      return result;
-    }
-    else {
-      return 0;
-    }
+    return Math.max(result, 0);
   }
 
   private int getRegionSizeNoLock(boolean includeHDFSResults) {
@@ -6365,7 +6360,7 @@ public class LocalRegion extends AbstractRegion
   void basicInvalidatePart2(RegionEntry re, EntryEventImpl event,
       boolean conflictwithClear, boolean invokeCallbacks)
   {
-    updateStatsForInvalidate();
+    updateStatsForInvalidate(event.getEventTime(0L));
 
     if (invokeCallbacks) {
       try {
@@ -6385,8 +6380,9 @@ public class LocalRegion extends AbstractRegion
   /**
    * Update stats
    */
-  private void updateStatsForInvalidate() {
+  private void updateStatsForInvalidate(long eventTime) {
     getCachePerfStats().incInvalidates();
+    setLastModifiedTime(eventTime);
   }
 
   void basicInvalidatePart3(RegionEntry re, EntryEventImpl event,
@@ -6446,14 +6442,13 @@ public class LocalRegion extends AbstractRegion
    * Called by lower levels, while still holding the write sync lock, and the
    * low level has completed its part of the basic destroy
    */
-  final void txApplyInvalidatePart2(RegionEntry re, Object key,
-      boolean didDestroy, boolean didInvalidate, boolean clearConflict)
-  {
+  final void txApplyInvalidatePart2(TXStateInterface tx, RegionEntry re, Object key,
+      boolean didDestroy, boolean didInvalidate, boolean clearConflict) {
     if (this.testCallable != null) {
       this.testCallable.call(this, Operation.INVALIDATE, re);
     }
     if (didInvalidate) {
-      updateStatsForInvalidate();
+      updateStatsForInvalidate(tx.getCommitTime());
       // Bug 40842: clearing index of the old value 
       // performed in AbstractRegionMap
     }
@@ -8512,7 +8507,7 @@ public class LocalRegion extends AbstractRegion
       boolean inTokenMode, boolean duringRI, boolean invokeCallbacks,
       Object expectedOldValue) {
     if (!inTokenMode || duringRI) {
-      updateStatsForDestroy();
+      updateStatsForDestroy(event.getEventTime(0L));
     }
     
     if (this.entryUserAttributes != null) {
@@ -8523,8 +8518,9 @@ public class LocalRegion extends AbstractRegion
   /**
    * Update stats
    */
-  private void updateStatsForDestroy() {
+  private void updateStatsForDestroy(long eventTime) {
     getCachePerfStats().incDestroys();
+    setLastModifiedTime(eventTime);
   }
 
   // Asif : This method will clear the tranxnl entries
@@ -8635,8 +8631,8 @@ public class LocalRegion extends AbstractRegion
    * Called by lower levels, while still holding the write sync lock, and the
    * low level has completed its part of the basic destroy
    */
-  void txApplyDestroyPart2(RegionEntry re, Object key, boolean inTokenMode, boolean clearConflict)
-  {
+  void txApplyDestroyPart2(TXStateInterface tx, RegionEntry re, Object key,
+      boolean inTokenMode, boolean clearConflict) {
     if (this.testCallable != null) {
       this.testCallable.call(this, Operation.DESTROY, re);
     }
@@ -8644,7 +8640,7 @@ public class LocalRegion extends AbstractRegion
       getImageState().addDestroyedEntry(key);
     }
     else {
-      updateStatsForDestroy();
+      updateStatsForDestroy(tx.getCommitTime());
     }
     if (this.entryUserAttributes != null) {
       this.entryUserAttributes.remove(key);

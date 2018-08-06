@@ -17,27 +17,22 @@
 
 package io.snappydata.collection;
 
-import com.koloboke.compile.KolobokeMap;
-import com.koloboke.function.IntObjPredicate;
+import java.util.function.IntPredicate;
 
-@KolobokeMap
-public abstract class IntObjectHashMap<V> {
+import com.koloboke.compile.KolobokeSet;
 
-  public static <V> IntObjectHashMap<V> withExpectedSize(int expectedSize) {
-    return new KolobokeIntObjectHashMap<>(expectedSize);
+@KolobokeSet
+public abstract class IntHashSet {
+
+  public static IntHashSet withExpectedSize(int expectedSize) {
+    return new KolobokeIntHashSet(expectedSize);
   }
 
-  public abstract V put(int key, V value);
-
-  public abstract void justPut(int key, V value);
-
-  public abstract V get(int key);
+  public abstract boolean add(int key);
 
   public abstract boolean contains(int key);
 
-  public abstract boolean justRemove(int key);
-
-  public abstract boolean forEachWhile(IntObjPredicate<? super V> predicate);
+  public abstract boolean forEachWhile(IntPredicate predicate);
 
   public abstract int size();
 

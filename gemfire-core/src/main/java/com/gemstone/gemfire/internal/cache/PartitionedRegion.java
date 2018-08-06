@@ -49,6 +49,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
 
@@ -7195,7 +7196,7 @@ public class PartitionedRegion extends LocalRegion implements
 
     }
 
-    PRLocalScanIterator(final Set<Integer> bucketIds, final TXState tx,
+    public PRLocalScanIterator(final Set<Integer> bucketIds, final TXState tx,
         final boolean forUpdate, final boolean includeValues,
         final boolean fetchRemote) {
       this(bucketIds, tx, DEFAULT_ITERATOR_CREATOR,

@@ -31,6 +31,8 @@ public abstract class LongObjectHashMap<V> {
     return new KolobokeLongObjectHashMap<>(expectedSize);
   }
 
+  public abstract V put(long key, V value);
+
   public abstract void justPut(long key, V value);
 
   public abstract V computeIfAbsent(long key,

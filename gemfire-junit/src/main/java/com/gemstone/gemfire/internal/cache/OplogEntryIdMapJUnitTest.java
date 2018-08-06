@@ -16,14 +16,7 @@
  */
 package com.gemstone.gemfire.internal.cache;
 
-import java.io.*;
-import java.util.*;
-
-import com.gemstone.gemfire.cache.*;
-import com.gemstone.gemfire.internal.Assert;
-import com.gemstone.gemfire.distributed.*;
 import com.gemstone.gemfire.internal.cache.Oplog.OplogEntryIdMap;
-
 import junit.framework.TestCase;
 
 /**
@@ -89,13 +82,8 @@ public class OplogEntryIdMapJUnitTest extends TestCase
     assertEquals(new Long(Long.MIN_VALUE), m.get(Long.MIN_VALUE));
     assertEquals(777777+1+777777+1+1, m.size());
 
-    int count = 0;
-    for (OplogEntryIdMap.Iterator it = m.iterator(); it.hasNext();) {
-      count++;
-      it.advance();
-      it.key();
-      it.value();
-    }
-    assertEquals(777777+1+777777+1+1, count);
+    final int[] count = new int[1];
+    m.forEachWhile((id, v) -> ++count[0] > 0);
+    assertEquals(777777+1+777777+1+1, count[0]);
   }
 }

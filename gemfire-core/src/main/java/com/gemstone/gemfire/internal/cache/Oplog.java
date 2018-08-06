@@ -118,6 +118,9 @@ import com.gemstone.gemfire.internal.offheap.annotations.Retained;
 import com.gemstone.gemfire.internal.sequencelog.EntryLogger;
 import com.gemstone.gemfire.internal.shared.ClientSharedUtils;
 import com.gemstone.gemfire.internal.shared.NativeCalls;
+import com.koloboke.function.LongObjPredicate;
+import io.snappydata.collection.IntObjectHashMap;
+import io.snappydata.collection.LongObjectHashMap;
 import io.snappydata.collection.OpenHashSet;
 import com.gemstone.gemfire.internal.shared.UnsupportedGFXDVersionException;
 import com.gemstone.gemfire.internal.shared.Version;
@@ -773,7 +776,8 @@ public final class Oplog implements CompactableOplog {
       if (ex instanceof DiskAccessException) {
         throw (DiskAccessException) ex;
       }
-      throw new DiskAccessException(LocalizedStrings.Oplog_FAILED_CREATING_OPERATION_LOG_BECAUSE_0.toLocalizedString(ex), getParent());
+      throw new DiskAccessException(LocalizedStrings.Oplog_FAILED_CREATING_OPERATION_LOG_BECAUSE_0
+          .toLocalizedString(ex), ex, getParent());
     }
   }
 
@@ -2667,10 +2671,10 @@ public final class Oplog implements CompactableOplog {
     } else {
       // For every live entry in this oplog add it to the deleted set
       // so that we will skip it when we recovery the next oplogs.
-      for (OplogEntryIdMap.Iterator it = getRecoveryMap().iterator(); it.hasNext();) {
-        it.advance();
-        deletedIds.add(it.key());
-      }
+      getRecoveryMap().forEachWhile((id, v) -> {
+        deletedIds.add(id);
+        return true;
+      });
       close();
     }
   }
@@ -9009,8 +9013,10 @@ public final class Oplog implements CompactableOplog {
    * Memory is optimized by using an int[] for ids in the unsigned int range.
    */
   public static class OplogEntryIdMap {
-    private final TStatelessIntObjectHashMap ints = new TStatelessIntObjectHashMap((int)DiskStoreImpl.INVALID_ID);
-    private final TStatelessLongObjectHashMap longs = new TStatelessLongObjectHashMap(DiskStoreImpl.INVALID_ID);
+    private final IntObjectHashMap<Object> ints =
+        IntObjectHashMap.withExpectedSize(16);
+    private final LongObjectHashMap<Object> longs =
+        LongObjectHashMap.withExpectedSize(16);
 
     public Object put(long id, Object v) {
       Object result;
@@ -9034,44 +9040,10 @@ public final class Oplog implements CompactableOplog {
       }
       return result;
     }
-    
-    public Iterator iterator() {
-      return new Iterator();
-    }
 
-    public class Iterator {
-      private boolean doingInt = true;
-      TStatelessIntObjectIterator intIt = ints.iterator();
-      TStatelessLongObjectIterator longIt = longs.iterator();
-      public boolean hasNext() {
-        if (this.intIt.hasNext()) {
-          return true;
-        } else {
-          doingInt = false;
-          return this.longIt.hasNext();
-        }
-      }
-      public void advance() {
-        if (doingInt) {
-          this.intIt.advance();
-        } else {
-          this.longIt.advance();
-        }
-      }
-      public long key() {
-        if (doingInt) {
-          return this.intIt.key();
-        } else {
-          return this.longIt.key();
-        }
-      }
-      public Object value() {
-        if (doingInt) {
-          return this.intIt.value();
-        } else {
-          return this.longIt.value();
-        }
-      }
+    public boolean forEachWhile(final LongObjPredicate<Object> predicate) {
+      return this.ints.forEachWhile(predicate::test) &&
+          this.longs.forEachWhile(predicate);
     }
   }
 

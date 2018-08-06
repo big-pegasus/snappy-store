@@ -67,7 +67,7 @@ import com.gemstone.gnu.trove.THash;
 import com.gemstone.gnu.trove.THashMap;
 import com.gemstone.gnu.trove.TObjectHashingStrategy;
 import com.gemstone.gnu.trove.TObjectProcedure;
-import io.snappydata.collection.OpenHashSet;
+import io.snappydata.collection.ObjectObjectHashMap;
 
 /**
  * TXState is the entity that tracks the transaction state on a per thread
@@ -1287,11 +1287,11 @@ public final class TXState implements TXStateInterface {
         pendingReadLocksCleanup(lockPolicy, null, null);
       }
 
-      writeRegions.keySet().stream().filter(region ->
-          region instanceof BucketRegion
-      ).forEach(region ->
-          ((BucketRegion)region).releaseSnapshotGIIReadLock()
-      );
+      writeRegions.keySet().forEach(region -> {
+        if (region instanceof BucketRegion) {
+          ((BucketRegion)region).releaseSnapshotGIIReadLock();
+        }
+      });
 
     } finally {
       if (this.txLocked.compareAndSet(true, false)) {
@@ -2492,8 +2492,8 @@ public final class TXState implements TXStateInterface {
     }
     txr.lock();
     try {
-      final THashMapWithCreate entryMap = checkForTXFinish.booleanValue() ? txr
-          .getEntryMap() : txr.getInternalEntryMap();
+      final ObjectObjectHashMap<Object, Object> entryMap =
+          checkForTXFinish ? txr.getEntryMap() : txr.getInternalEntryMap();
       if (entryMap.putIfAbsent(key, entry) != null) {
         // entry exists and must be at least read locked, so release this lock
         this.lockPolicy.releaseLock(entry, this.lockPolicy.getReadLockMode(),
@@ -3041,7 +3041,7 @@ public final class TXState implements TXStateInterface {
         // replace back the read locked entry, else remove it
         if (txEntryCreated) {
           if (lockedForRead) {
-            txr.getEntryMap().put(eventKey, entry);
+            txr.getEntryMap().justPut(eventKey, entry);
           }
           else {
             txr.getEntryMap().remove(eventKey);
@@ -3910,16 +3910,7 @@ public final class TXState implements TXStateInterface {
     }
   }
 
-  /**
-   * Return either the {@link TXEntryState} if the given entry is in TXState
-   * else return the provided region entry itself.
-   */
-  public final Object getLocalEntry(final LocalRegion region,
-      LocalRegion dataRegion, final int bucketId, final AbstractRegionEntry re, boolean isWrite) {
-
-    // for local/distributed regions, the key is the RegionEntry itself
-    // getDataRegion will work correctly neverthless
-
+  private boolean checkTX(LocalRegion region, AbstractRegionEntry re) {
     // need to check in TXState only if the entry has been locked by a TX
     final boolean checkTX = getLockingPolicy().lockedForWrite(re, null, null);
     if (TXStateProxy.LOG_FINE) {
@@ -3928,7 +3919,32 @@ public final class TXState implements TXStateInterface {
           + region.getFullPath() + " RegionEntry(" + re + ") checkTX="
           + checkTX);
     }
-    if (checkTX) {
+    return checkTX;
+  }
+
+  /**
+   * Return either the {@link TXEntryState} if the given entry is in TXState
+   * else return the provided region entry itself.
+   */
+  public final Object getLocalEntry(final LocalRegion region,
+      LocalRegion dataRegion, final int bucketId, final AbstractRegionEntry re,
+      boolean isWrite) {
+
+    // for local/distributed regions, the key is the RegionEntry itself
+    // getDataRegion will work correctly nevertheless
+
+    if (!isWrite && shouldGetOldEntry(dataRegion)) {
+      final Object key = re.getKey();
+      if (dataRegion == null) {
+        dataRegion = region.getDataRegionForRead(key, null, bucketId,
+            Operation.GET_ENTRY);
+      }
+      if (dataRegion.getVersionVector() != null) {
+        if (!checkEntryInSnapshot(this, dataRegion, re)) {
+          return getOldVersionedEntry(this, dataRegion, re.getKeyCopy(), re);
+        }
+      }
+    } else if (checkTX(region, re)) {
       final Object key = re.getKey();
       if (dataRegion == null) {
         dataRegion = region.getDataRegionForRead(key, null, bucketId,
@@ -3966,17 +3982,6 @@ public final class TXState implements TXStateInterface {
           }
         } finally {
           txr.unlock();
-        }
-      }
-    } else if (!isWrite && shouldGetOldEntry(dataRegion)) {
-      final Object key = re.getKeyCopy();
-      if (dataRegion == null) {
-        dataRegion = region.getDataRegionForRead(key, null, bucketId,
-            Operation.GET_ENTRY);
-      }
-      if (dataRegion.getVersionVector() != null) {
-        if (!checkEntryInSnapshot(this, dataRegion, re)) {
-          return getOldVersionedEntry(this, dataRegion, key, re);
         }
       }
     }

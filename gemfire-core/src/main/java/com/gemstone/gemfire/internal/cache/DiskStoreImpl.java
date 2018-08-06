@@ -101,6 +101,8 @@ import com.gemstone.gemfire.internal.offheap.annotations.Retained;
 import com.gemstone.gemfire.internal.shared.Version;
 import com.gemstone.gnu.trove.THashMap;
 import com.gemstone.gnu.trove.THashSet;
+import io.snappydata.collection.IntHashSet;
+import io.snappydata.collection.LongHashSet;
 
 import static com.gemstone.gemfire.internal.cache.GemFireCacheImpl.sysProps;
 
@@ -3949,10 +3951,8 @@ public class DiskStoreImpl implements DiskStore, ResourceListener<MemoryEvent> {
    * in the unsigned int range.
    */
   public static class OplogEntryIdSet {
-    private final TStatelessIntHashSet ints = new TStatelessIntHashSet(
-        (int) INVALID_ID);
-    private final TStatelessLongHashSet longs = new TStatelessLongHashSet(
-        INVALID_ID);
+    private final IntHashSet ints = IntHashSet.withExpectedSize(16);
+    private final LongHashSet longs = LongHashSet.withExpectedSize(16);
 
     public void add(long id) {
       if (id >= 0 && id <= 0x00000000FFFFFFFFL) {
@@ -3973,10 +3973,10 @@ public class DiskStoreImpl implements DiskStore, ResourceListener<MemoryEvent> {
     public int size() {
       return this.ints.size() + this.longs.size();
     }
-    
+
     public void addAll(OplogEntryIdSet toAdd) {
-      this.ints.addAll(toAdd.ints.toArray());
-      this.longs.addAll(toAdd.longs.toArray());
+      toAdd.ints.forEachWhile(this.ints::add);
+      toAdd.longs.forEachWhile(this.longs::add);
     }
   }
 

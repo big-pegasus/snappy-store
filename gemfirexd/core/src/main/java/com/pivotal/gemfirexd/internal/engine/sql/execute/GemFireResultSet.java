@@ -966,7 +966,7 @@ public final class GemFireResultSet extends AbstractGemFireResultSet implements
     for (Object gfKey : this.gfKeys) {
       // also see assertion in constructor
       assert gfKey instanceof CompactCompositeRegionKey;
-      giKeys.put(((CompactCompositeRegionKey)gfKey).getKeyColumn(0),
+      giKeys.justPut(((CompactCompositeRegionKey)gfKey).getKeyColumn(0),
           ((CompactCompositeRegionKey)gfKey));
     }
 
@@ -999,7 +999,7 @@ public final class GemFireResultSet extends AbstractGemFireResultSet implements
       GetAllSingletonResult result = null;
       while ((result = getNextFromGetAll(true)) != null
           && result.currentRowForGetAll != null) {
-        this.getAllKeysAndRoutingObjects.put(giKeys
+        this.getAllKeysAndRoutingObjects.justPut(giKeys
             .get(result.currentKeyForGetAll),
             ((GlobalRowLocation)result.currentRowForGetAll)
                 .getRoutingObject());

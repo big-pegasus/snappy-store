@@ -132,6 +132,11 @@ public interface StoreCallbacks {
   void clearConnectionPools();
 
   /**
+   * Clear all code-generation caches.
+   */
+  void clearCodegenCaches();
+
+  /**
    * Get the class loader of the lead
    */
   URLClassLoader getLeadClassLoader();

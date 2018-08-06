@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import com.gemstone.gemfire.DataSerializer;
 import com.gemstone.gemfire.GemFireCheckedException;
@@ -55,7 +56,6 @@ import com.gemstone.gemfire.distributed.internal.membership.InternalDistributedM
 import com.gemstone.gemfire.internal.Assert;
 import com.gemstone.gemfire.internal.cache.DirectReplyMessage;
 import com.gemstone.gemfire.internal.cache.GemFireCacheImpl;
-import com.gemstone.gemfire.internal.cache.THashMapWithCreate;
 import com.gemstone.gemfire.internal.cache.TXManagerImpl;
 import com.gemstone.gemfire.internal.cache.TXStateInterface;
 import com.gemstone.gemfire.internal.cache.TXStateProxy;
@@ -92,9 +92,11 @@ import com.pivotal.gemfirexd.internal.engine.store.GemFireContainer;
 import com.pivotal.gemfirexd.internal.iapi.error.StandardException;
 import com.pivotal.gemfirexd.internal.iapi.services.monitor.Monitor;
 import com.pivotal.gemfirexd.internal.iapi.sql.conn.LanguageConnectionContext;
+import com.pivotal.gemfirexd.internal.iapi.util.ReuseFactory;
 import com.pivotal.gemfirexd.internal.impl.sql.execute.xplain.XPLAINUtil;
 import com.pivotal.gemfirexd.internal.shared.common.reference.SQLState;
 import com.pivotal.gemfirexd.internal.shared.common.sanity.SanityManager;
+import io.snappydata.collection.ObjectObjectHashMap;
 
 /**
  * Base abstract class for GemFireXD function messages. This is not directly
@@ -1582,8 +1584,6 @@ public abstract class GfxdFunctionMessage<T> extends
 
       protected int lastFlushedId;
 
-      private static final Object[] zeroLenArray = new Object[0];
-
       /**
        * The array buffer into which the elements of the list are stored.
        */
@@ -1592,7 +1592,7 @@ public abstract class GfxdFunctionMessage<T> extends
       private int size;
 
       public ListOfReplies(int capacity) {
-        this.elementData = capacity == 0 ? zeroLenArray
+        this.elementData = capacity == 0 ? ReuseFactory.getZeroLenObjectArray()
             : new Object[capacity];
       }
 
@@ -1702,28 +1702,23 @@ public abstract class GfxdFunctionMessage<T> extends
     /**
      * Map of a DistributedMember to its pending {@link ListOfReplies}.
      */
-    protected final THashMapWithCreate pendingReplies;
+    protected final ObjectObjectHashMap<InternalDistributedMember, Object> pendingReplies;
 
-    static final THashMapWithCreate.ValueCreator pendingListCreator =
-        new THashMapWithCreate.ValueCreator() {
-      @Override
-      public final Object create(Object key, Object params) {
+    static final Function<InternalDistributedMember, Object> pendingListCreator = k ->
         // create with size zero optimizing for the case when no out of order
         // replies are received
-        return new ListOfReplies(0);
-      }
-    };
+        new ListOfReplies(0);
 
     public GfxdFunctionOrderedReplyMessageProcessor(DM dm,
         Set<DistributedMember> members, GfxdFunctionMessage<T> msg) {
       super(dm, members, msg);
-      this.pendingReplies = new THashMapWithCreate();
+      this.pendingReplies = ObjectObjectHashMap.withExpectedSize(8);
     }
 
     public GfxdFunctionOrderedReplyMessageProcessor(DM dm,
         InternalDistributedMember member, GfxdFunctionMessage<T> msg) {
       super(dm, member, msg);
-      this.pendingReplies = new THashMapWithCreate();
+      this.pendingReplies = ObjectObjectHashMap.withExpectedSize(8);
     }
 
     /**
@@ -1737,8 +1732,8 @@ public abstract class GfxdFunctionMessage<T> extends
       final InternalDistributedMember sender = replyMsg.getSender();
       final boolean isLastResult = responseCode.isGrant();
       if (isLastResult || responseCode.isWaiting()) {
-        final Object replies = this.pendingReplies.create(sender,
-            pendingListCreator, null);
+        final Object replies = this.pendingReplies.computeIfAbsent(sender,
+            pendingListCreator);
         if (replies != Token.DESTROYED) {
           return ((ListOfReplies)replies).add(this, sender, replyMsg
               .singleResult, isLastResult ? responseCode.grantedSequenceId()

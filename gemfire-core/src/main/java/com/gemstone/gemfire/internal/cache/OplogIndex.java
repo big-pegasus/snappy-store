@@ -31,6 +31,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 
 import com.gemstone.gemfire.CancelCriterion;
@@ -52,7 +53,7 @@ import com.gemstone.gemfire.internal.shared.unsafe.ChannelBufferUnsafeDataOutput
 import com.gemstone.gnu.trove.THashMap;
 import com.gemstone.gnu.trove.THashSet;
 import com.gemstone.gnu.trove.TLongArrayList;
-import com.gemstone.gnu.trove.TObjectObjectProcedure;
+import io.snappydata.collection.ObjectObjectHashMap;
 
 /**
  * Encapsulates methods to read and write from index files in an Oplog.
@@ -278,7 +279,7 @@ public final class OplogIndex {
   public static final class IndexData {
     public final SortedIndexContainer index;
     public final SortedIndexRecoveryJob indexJob;
-    public final THashMapWithCreate indexEntryMap;
+    public final ObjectObjectHashMap<SortedIndexKey, TLongArrayList> indexEntryMap;
 
     public final int action;
 
@@ -296,7 +297,7 @@ public final class OplogIndex {
       this.index = index;
       this.indexJob = indexJob;
       this.indexEntryMap = (action != ONLY_LOAD
-          ? new THashMapWithCreate(entryCacheSize) : null);
+          ? ObjectObjectHashMap.withExpectedSize(entryCacheSize) : null);
       this.action = action;
     }
 
@@ -348,10 +349,8 @@ public final class OplogIndex {
     final boolean hasOffHeap = getDiskIdToIndexDataMap(dumpIndexes,
         loadIndexes, entryCacheSize, drvIdToIndexes, null);
 
-    final THashMapWithCreate.ValueCreator entryListCreator =
-        new THashMapWithCreate.ValueCreator() {
-      @Override
-      public Object create(Object key, Object params) {
+    final Function<SortedIndexKey, TLongArrayList> entryListCreator = key -> {
+      {
         if (hasOffHeap) {
           // Snapshot the key bytes, as the offheap value bytes used as index
           // key would be
@@ -359,7 +358,7 @@ public final class OplogIndex {
           // Since a newTLongArrayList is created, implying this index key will
           // be used in the dumping code
           // Check if snap shot is needed in case of only load
-          ((SortedIndexKey)key).snapshotKeyFromValue();         
+          key.snapshotKeyFromValue();
         }
         return new TLongArrayList(2);
       }
@@ -418,7 +417,7 @@ public final class OplogIndex {
   }
 
   private void dumpOrLoadIndex(final IndexData indexData, final Object val,
-      DiskEntry entry, final THashMapWithCreate.ValueCreator entryListCreator) {
+      DiskEntry entry, Function<SortedIndexKey, TLongArrayList> entryListCreator) {
     final SortedIndexContainer index = indexData.index;
     SortedIndexKey ikey = index.getIndexKey(val, entry);
     switch (indexData.action) {
@@ -431,9 +430,10 @@ public final class OplogIndex {
         indexData.indexJob.addJob(ikey, entry);
         // fall-through deliberate
       case IndexData.ONLY_DUMP:
-        THashMapWithCreate entryIdsPerIndexKey = indexData.indexEntryMap;
-        TLongArrayList entryList = (TLongArrayList)entryIdsPerIndexKey
-            .create(ikey, entryListCreator, null);
+        ObjectObjectHashMap<SortedIndexKey, TLongArrayList> entryIdsPerIndexKey =
+            indexData.indexEntryMap;
+        TLongArrayList entryList = entryIdsPerIndexKey.computeIfAbsent(
+            ikey, entryListCreator);
         entryList.add(Math.abs(entry.getDiskId().getKeyId()));
         break;
       default:
@@ -446,7 +446,8 @@ public final class OplogIndex {
     for (IndexData[] indexes : allIndexes) {
       for (IndexData indexData : indexes) {
         SortedIndexContainer index = indexData.index;
-        THashMapWithCreate entryIdsPerIndexKey = indexData.indexEntryMap;
+        ObjectObjectHashMap<SortedIndexKey, TLongArrayList> entryIdsPerIndexKey =
+            indexData.indexEntryMap;
         if (entryIdsPerIndexKey != null && entryIdsPerIndexKey.size() > 0) {
           writeIRFRecords(index, entryIdsPerIndexKey, dos);
           entryIdsPerIndexKey.clear();
@@ -537,7 +538,7 @@ public final class OplogIndex {
   }
 
   public void writeIRFRecords(final SortedIndexContainer indexContainer,
-      THashMap entryIdsPerIndexKey,
+      ObjectObjectHashMap<SortedIndexKey, TLongArrayList> entryIdsPerIndexKey,
       final ChannelBufferUnsafeDataOutputStream dos) {
     try {
       final LogWriterI18n logger = this.oplog.logger;
@@ -552,20 +553,17 @@ public final class OplogIndex {
         logger.info(LocalizedStrings.DEBUG, "OplogIndex#writeIRFRecords: "
             + "written indexId record for index: " + indexId);
       }
-      entryIdsPerIndexKey.forEachEntry(new TObjectObjectProcedure() {
-        @Override
-        public boolean execute(Object key, Object value) {
+      entryIdsPerIndexKey.forEachWhile((ikey, entryKeyIds) -> {
+        {
           try {
             dos.writeByte(INDEX_RECORD);
-            SortedIndexKey ikey = (SortedIndexKey)key;
             ikey.writeKeyBytes(dos);
-            TLongArrayList entryKeyIds = (TLongArrayList)value;
             int numKeyIds = entryKeyIds.size();
             assert numKeyIds > 0;
             InternalDataSerializer.writeUnsignedVL(numKeyIds, dos);
             if (DiskStoreImpl.INDEX_LOAD_DEBUG_FINER) {
               logger.info(LocalizedStrings.DEBUG, "OplogIndex#writeIRFRecords: "
-                  + "writing actual index record with index key: " + key
+                  + "writing actual index record with index key: " + ikey
                   + " list of oplogEntryIds: " + entryKeyIds.toString());
             }
             if (numKeyIds == 1) {

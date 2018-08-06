@@ -17,15 +17,20 @@
 
 package io.snappydata.collection;
 
+import java.io.Externalizable;
+import java.io.IOException;
+import java.io.ObjectInput;
+import java.io.ObjectOutput;
 import java.util.Map;
 import java.util.function.BiPredicate;
+import java.util.function.Function;
 
 import com.koloboke.compile.CustomKeyEquivalence;
 import com.koloboke.compile.KolobokeMap;
 
 @KolobokeMap
 @CustomKeyEquivalence
-public abstract class ObjectObjectHashMap<K, V> implements Map<K, V> {
+public abstract class ObjectObjectHashMap<K, V> implements Map<K, V>, Externalizable {
 
   public static <K, V> ObjectObjectHashMap<K, V> withExpectedSize(int expectedSize) {
     return new KolobokeObjectObjectHashMap<>(expectedSize);
@@ -37,6 +42,13 @@ public abstract class ObjectObjectHashMap<K, V> implements Map<K, V> {
     m.putAll(map);
     return m;
   }
+
+  public abstract void justPut(K key, V value);
+
+  public abstract V putIfAbsent(K key, V value);
+
+  public abstract V computeIfAbsent(K key,
+      Function<? super K, ? extends V> mappingFunction);
 
   public abstract boolean forEachWhile(BiPredicate<? super K, ? super V> predicate);
 
@@ -51,5 +63,40 @@ public abstract class ObjectObjectHashMap<K, V> implements Map<K, V> {
 
   final boolean keyEquals(K queriedKey, K keyInMap) {
     return queriedKey.equals(keyInMap);
+  }
+
+  @Override
+  public void writeExternal(final ObjectOutput out) throws IOException {
+    int size = size();
+    out.writeInt(size);
+    try {
+      forEachWhile((k, v) -> {
+        try {
+          out.writeObject(k);
+          out.writeObject(v);
+        } catch (IOException ioe) {
+          throw new RuntimeException(ioe);
+        }
+        return true;
+      });
+    } catch (RuntimeException re) {
+      if (re.getCause() instanceof IOException) {
+        throw (IOException)re.getCause();
+      } else {
+        throw re;
+      }
+    }
+  }
+
+  @Override
+  public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
+    int size = in.readInt();
+    while (size-- > 0) {
+      @SuppressWarnings("unchecked")
+      K k = (K)in.readObject();
+      @SuppressWarnings("unchecked")
+      V v = (V)in.readObject();
+      justPut(k, v);
+    }
   }
 }

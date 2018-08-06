@@ -1619,6 +1619,9 @@ public final class SnappyDataServiceImpl extends LocatorServiceImpl implements
       if (source.isSetSnapshotTransactionId() && !target.isSetSnapshotTransactionId()) {
         target.setSnapshotTransactionId(source.getSnapshotTransactionId());
       }
+      if (source.isSetLockOwner() && !target.isSetLockOwner()) {
+        target.setLockOwner(source.getLockOwner());
+      }
     }
     if (target != null) {
       // apply the attributes to statement and connection
@@ -1639,7 +1642,8 @@ public final class SnappyDataServiceImpl extends LocatorServiceImpl implements
       if (target.isSetBucketIds()) {
         GfxdSystemProcedures.setBucketsForLocalExecution(
             target.getBucketIdsTable(), target.getBucketIds(),
-            target.isRetainBucketIds(), conn.getLanguageConnectionContext());
+            target.isRetainBucketIds(), target.getLockOwner(),
+            conn.getLanguageConnectionContext());
       }
       if (target.isSetMetadataVersion()) {
         final GfxdDistributionAdvisor.GfxdProfile profile = GemFireXDUtils.

@@ -45,6 +45,7 @@ import com.gemstone.gemfire.internal.offheap.annotations.Released;
 import com.gemstone.gemfire.internal.offheap.annotations.Retained;
 import com.gemstone.gemfire.internal.offheap.annotations.Unretained;
 import com.gemstone.gemfire.internal.util.ArrayUtils;
+import io.snappydata.collection.ObjectObjectHashMap;
 
 /**
  * TXEntryState is the entity that tracks transactional changes, except for
@@ -1775,9 +1776,9 @@ public class TXEntryState implements TXEntryId, Releasable {
       lockPolicy.releaseLock(entry, lockPolicy.getReadLockMode(), txState.txId,
           false, dataRegion);
     }
-    final THashMapWithCreate entryMap = checkValid ? txrs.getEntryMap() : txrs
-        .getInternalEntryMap();
-    entryMap.put(this.regionKey, this);
+    final ObjectObjectHashMap<Object, Object> entryMap =
+        checkValid ? txrs.getEntryMap() : txrs.getInternalEntryMap();
+    entryMap.justPut(this.regionKey, this);
     if (isDirty()) {
       updateForCommit(txState);
     }
