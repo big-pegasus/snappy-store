@@ -252,6 +252,9 @@ public final class FabricDatabase implements ModuleControl,
   public static boolean skipIndexCheck = SystemProperties.getServerInstance().getBoolean(
       com.pivotal.gemfirexd.Property.DDLREPLAY_NO_INDEX_CHECK, false);
 
+  public static final boolean disallowMetastoreOnLocator = SystemProperties.getServerInstance().getBoolean(
+          "snappydata.DISALLOW_METASTORE_ON_LOCATOR", false);
+
   /**
    * Creates a new FabricDatabase object.
    */
@@ -883,6 +886,7 @@ public final class FabricDatabase implements ModuleControl,
     return gfDBTablesMap;
   }
 
+
   /**
    * Replays the initial DDL received by GII from other nodes or recovered from
    * disc.
@@ -1122,7 +1126,8 @@ public final class FabricDatabase implements ModuleControl,
             final DDLConflatable conflatable = (DDLConflatable)qVal;
             String schemaForTable = conflatable.getSchemaForTableNoThrow();
             if (this.memStore.restrictedDDLStmtQueue() &&
-                !(schemaForTable != null && Misc.isSnappyHiveMetaTable(schemaForTable))) {
+                !(!disallowMetastoreOnLocator &&
+                    schemaForTable != null && Misc.isSnappyHiveMetaTable(schemaForTable))) {
               continue;
             }
             // check for any merged DDLs
@@ -1940,6 +1945,17 @@ public final class FabricDatabase implements ModuleControl,
     return lctx;
   }
 
+  private static String getSchemaOwner(String in_defaultSchema) {
+    String owner = in_defaultSchema;
+    GemFireStore ms = Misc.getMemStoreBootingNoThrow();
+    if (ms != null) {
+      if (ms.isSnappyStore() && !ms.tableCreationAllowed() && Misc.isSecurityEnabled()) {
+        owner = ms.getDatabase().getDataDictionary().getAuthorizationDatabaseOwner();
+      }
+    }
+    return owner;
+  }
+
   /**
    * Setup the default schema for the given "defaultSchema" creating it if necessary.
    */
@@ -1951,7 +1967,8 @@ public final class FabricDatabase implements ModuleControl,
       defaultSchema = dd.getSchemaDescriptor(in_defaultSchema, tc, false);
     }
     if (defaultSchema == null) {
-      defaultSchema = new SchemaDescriptor(dd, in_defaultSchema, in_defaultSchema, dd
+      String schemaOwner = getSchemaOwner(in_defaultSchema);
+      defaultSchema = new SchemaDescriptor(dd, in_defaultSchema, schemaOwner, dd
           .getUUIDFactory().createUUID(), false);
       try {
         dd.addDescriptor(defaultSchema, null,

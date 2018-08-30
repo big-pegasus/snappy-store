@@ -55,6 +55,7 @@ import com.pivotal.gemfirexd.internal.engine.ddl.GfxdDDLPreprocess;
 import com.pivotal.gemfirexd.internal.engine.ddl.callbacks.CallbackProcedures;
 import com.pivotal.gemfirexd.internal.engine.ddl.catalog.GfxdSystemProcedures;
 import com.pivotal.gemfirexd.internal.engine.ddl.wan.messages.AbstractGfxdReplayableMessage;
+import com.pivotal.gemfirexd.internal.engine.distributed.GfxdDistributionAdvisor;
 import com.pivotal.gemfirexd.internal.engine.distributed.utils.GemFireXDUtils;
 import com.pivotal.gemfirexd.internal.engine.sql.catalog.ExtraTableInfo;
 import com.pivotal.gemfirexd.internal.engine.stats.ConnectionStats;
@@ -1777,6 +1778,12 @@ public final class GfxdSystemProcedureMessage extends
           // only this one if user has for multiple groups
         } finally {
           tc.commit();
+          // clear the plan cache on lead node
+          GfxdDistributionAdvisor.GfxdProfile profile = GemFireXDUtils.getGfxdProfile(Misc.getMyId());
+          if (profile != null && profile.hasSparkURL()) {
+            CallbackFactoryProvider.getStoreCallbacks().clearSessionCache(true);
+            CallbackFactoryProvider.getStoreCallbacks().refreshPolicies(ldapGroup);
+          }
           if (disableLogging) {
             tc.disableLogging();
           }
