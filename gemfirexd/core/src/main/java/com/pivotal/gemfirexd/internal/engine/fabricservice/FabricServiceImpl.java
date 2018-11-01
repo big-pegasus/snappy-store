@@ -78,6 +78,7 @@ import com.pivotal.gemfirexd.internal.impl.jdbc.Util;
 import com.pivotal.gemfirexd.internal.impl.services.monitor.FileMonitor;
 import com.pivotal.gemfirexd.internal.shared.common.reference.MessageId;
 import com.pivotal.gemfirexd.internal.shared.common.reference.SQLState;
+import com.pivotal.gemfirexd.internal.shared.common.sanity.AssertFailure;
 import com.pivotal.gemfirexd.internal.shared.common.sanity.SanityManager;
 import io.snappydata.jdbc.AutoloadedDriver;
 import io.snappydata.thrift.ServerType;
@@ -445,6 +446,15 @@ public abstract class FabricServiceImpl implements FabricService {
         logger.warn("exception while shutting down " + ex);
         exception = ex;
       }
+    } catch (AssertFailure ae) {
+      // ignore security failure in shutdown
+      if (!ae.getMessage().contains("There is no valid authentication service")) {
+        logger.warn("exception while shutting down " + ae);
+      }
+      GemFireCacheImpl cache = GemFireCacheImpl.getInstance();
+      if (cache != null && !cache.isClosed()) {
+        cache.close();
+      }
     }
 
     if (exception != null) {
@@ -515,18 +525,17 @@ public abstract class FabricServiceImpl implements FabricService {
       SanityManager.THROWASSERT("boot indicator cannot be user supplied.");
     }
 
-    AuthenticationService authService = (AuthenticationService)Monitor
-        .findServiceModule(Misc.getMemStore().getDatabase(),
-            AuthenticationService.MODULE,
-            GfxdConstants.PEER_AUTHENTICATION_SERVICE);
-
-    if (authService == null) {
+    GemFireStore memStore = Misc.getMemStoreBootingNoThrow();
+    AuthenticationService authService;
+    if (memStore == null || (authService = memStore.getDatabase()
+        .getAuthenticationService()) != null) {
       return;
     }
     // doing authentication before n/w server shutdown.
     // taken from InternalDriver#connect...
     String failure;
-    if ((failure = authService.authenticate(null, shutdownCredentials)) != null) {
+    if ((failure = authService.authenticate(memStore.getDatabaseName(),
+        shutdownCredentials)) != null) {
       throw Util.generateCsSQLException(SQLState.NET_CONNECT_AUTH_FAILED,
           MessageService.getTextMessage(MessageId.AUTH_INVALID, failure));
     }
@@ -1854,16 +1863,16 @@ public abstract class FabricServiceImpl implements FabricService {
       Class.forName(driver).newInstance();
     } catch (ClassNotFoundException cnfe) {
       cnfe.printStackTrace();
-      SanityManager.DEBUG_PRINT("warning", "Unable to load the JDBC driver "
+      SanityManager.DEBUG_PRINT("warning:BOOT", "Unable to load the JDBC driver "
           + driver + ":" + cnfe.getMessage());
     } catch (InstantiationException ie) {
       ie.printStackTrace();
-      SanityManager.DEBUG_PRINT("warning",
+      SanityManager.DEBUG_PRINT("warning:BOOT",
           "Unable to instantiate the JDBC driver " + driver + ":"
               + ie.getMessage());
     } catch (IllegalAccessException iae) {
       iae.printStackTrace();
-      SanityManager.DEBUG_PRINT("warning",
+      SanityManager.DEBUG_PRINT("warning:BOOT",
           "Not allowed to access the JDBC driver " + driver + ":"
               + iae.getMessage());
     }

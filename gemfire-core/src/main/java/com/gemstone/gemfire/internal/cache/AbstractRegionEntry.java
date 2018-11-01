@@ -308,6 +308,10 @@ public abstract class AbstractRegionEntry extends ExclusiveSharedSynchronizer
   public final boolean isRemovedPhase2() {
     return getValueAsToken() == Token.REMOVED_PHASE2;
   }
+
+  public final boolean isRemovedPhase1() {
+    return getValueAsToken() == Token.REMOVED_PHASE1;
+  }
   
   public boolean fillInValue(LocalRegion region,
                              @Retained(ABSTRACT_REGION_ENTRY_FILL_IN_VALUE) InitialImageOperation.Entry dst,
@@ -1431,9 +1435,14 @@ public abstract class AbstractRegionEntry extends ExclusiveSharedSynchronizer
     if (!isOffHeap) {
       rawOldVal = getValueField();
       if (rawOldVal != val && rawOldVal instanceof SerializedDiskBuffer) {
-        setValueField(val);
-        if (context != null) context.updateMemoryStats(rawOldVal, val);
-        ((SerializedDiskBuffer)rawOldVal).release();
+        // sync block ensures that region stats and reference count update are
+        // atomic so any concurrent readers changing internal buffer from
+        // compressed to decompressed or vice-versa also update stats atomically
+        synchronized (rawOldVal) {
+          setValueField(val);
+          if (context != null) context.updateMemoryStats(rawOldVal, val);
+          ((SerializedDiskBuffer)rawOldVal).release();
+        }
         return;
       }
     }

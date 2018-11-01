@@ -345,6 +345,18 @@ public abstract class ClientSharedUtils {
     }
   }
 
+  public static boolean parseBoolean(String s) {
+    if (s != null) {
+      if (s.length() == 1) {
+        return Integer.parseInt(s) != 0;
+      } else {
+        return Boolean.parseBoolean(s);
+      }
+    } else {
+      return false;
+    }
+  }
+
   public static String newWrappedString(final char[] chars, final int offset,
       final int size) {
     if (size >= 0) {
@@ -716,7 +728,7 @@ public abstract class ClientSharedUtils {
               if (ex instanceof UnsupportedOperationException) {
                 if (!socketKeepAliveIdleWarningLogged) {
                   socketKeepAliveIdleWarningLogged = true;
-                  // KEEPIDLE is the minumum required for this, so
+                  // KEEPIDLE is the minimum required for this, so
                   // log as a warning
                   doLogWarning = 1;
                 }
@@ -734,6 +746,10 @@ public abstract class ClientSharedUtils {
               } else {
                 doLogWarning = 2;
               }
+              // skip logging for default setting
+              if (keepInterval == SystemProperties.DEFAULT_KEEPALIVE_INTVL) {
+                doLogWarning = 0;
+              }
               break;
             case OPT_KEEPCNT:
               if (ex instanceof UnsupportedOperationException) {
@@ -744,6 +760,10 @@ public abstract class ClientSharedUtils {
                 }
               } else {
                 doLogWarning = 2;
+              }
+              // skip logging for default setting
+              if (keepCount == SystemProperties.DEFAULT_KEEPALIVE_CNT) {
+                doLogWarning = 0;
               }
               break;
           }
@@ -1378,7 +1398,7 @@ public abstract class ClientSharedUtils {
 
   // Convert log4j.Level to java.util.logging.Level
   public static Level convertToJavaLogLevel(org.apache.log4j.Level log4jLevel) {
-    Level javaLevel = Level.INFO;
+    Level javaLevel = Level.CONFIG;
     if (log4jLevel != null) {
       if (log4jLevel == org.apache.log4j.Level.ERROR) {
         javaLevel = Level.SEVERE;
@@ -1417,9 +1437,9 @@ public abstract class ClientSharedUtils {
     return levelStr;
   }
 
-  public static void initLog4J(String logFile,
+  public static void initLog4j(String logFile,
       Level level) throws IOException {
-    initLog4J(logFile, null, level);
+    initLog4j(logFile, null, level);
   }
 
   public static Properties getLog4jConfProperties(
@@ -1435,7 +1455,7 @@ public abstract class ClientSharedUtils {
     return null;
   }
 
-  private static Properties getLog4JProperties(String logFile,
+  private static Properties getLog4jProperties(String logFile,
       Level level) throws IOException {
     // check for user provided properties file in "conf/"
     String snappyHome = NativeCalls.getInstance().getEnvironment("SNAPPY_HOME");
@@ -1477,11 +1497,11 @@ public abstract class ClientSharedUtils {
     return props;
   }
 
-  public static synchronized void initLog4J(String logFile,
+  public static synchronized void initLog4j(String logFile,
       Properties userProps, Level level) throws IOException {
     Properties props;
     if (baseLoggerProperties.isEmpty() || logFile != null) {
-      props = getLog4JProperties(logFile, level);
+      props = getLog4jProperties(logFile, level);
       baseLoggerProperties.clear();
       baseLoggerProperties.putAll(props);
     } else {
@@ -1492,6 +1512,17 @@ public abstract class ClientSharedUtils {
     }
     LogManager.resetConfiguration();
     PropertyConfigurator.configure(props);
+
+    // explicitly set the root log-level
+    String rootLogLevel = props.getProperty("log4j.rootCategory");
+    if (rootLogLevel != null) {
+      int idx = rootLogLevel.indexOf(',');
+      if (idx != -1) {
+        rootLogLevel = rootLogLevel.substring(0, idx).trim();
+      }
+      LogManager.getRootLogger().setLevel(
+          org.apache.log4j.Level.toLevel(rootLogLevel));
+    }
   }
 
   public static synchronized void initLogger(String loggerName, String logFile,
@@ -1504,7 +1535,7 @@ public abstract class ClientSharedUtils {
     clearLogger();
     if (initLog4j) {
       try {
-        initLog4J(logFile, level);
+        initLog4j(logFile, level);
       } catch (IOException ioe) {
         throw newRuntimeException(ioe.getMessage(), ioe);
       }

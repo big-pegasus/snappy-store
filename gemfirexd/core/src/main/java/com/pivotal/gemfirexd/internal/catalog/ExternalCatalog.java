@@ -47,12 +47,24 @@ public interface ExternalCatalog {
   boolean isColumnTable(String schema, String tableName, boolean skipLocks);
 
   /**
-   * Will be used by the execution engine to execute query in gemfirexd
-   * if tablename is of a row table.
+   * Will be used by the execution engine to route to JobServer
+   * when it finds out that this table is a column table.
+   * <p>
+   * This variant expects table meta-data as returned by {@link #getTable}.
    *
    * @return true if the table is column table, false if row/ref table
    */
-  boolean isRowTable(String schema, String tableName, boolean skipLocks);
+  boolean isColumnTable(Object hiveTable);
+
+  /**
+   * Will be used by the execution engine to execute query in gemfirexd
+   * if tablename is of a row table.
+   * <p>
+   * This variant expects table meta-data as returned by {@link #getTable}.
+   *
+   * @return true if the table is column table, false if row/ref table
+   */
+  boolean isRowTable(Object hiveTable);
 
   /**
    * Get the schema for a column table in Json format (as in Spark).
@@ -66,12 +78,13 @@ public interface ExternalCatalog {
   HashMap<String, List<String>> getAllStoreTablesInCatalog(boolean skipLocks);
 
   /**
-   *  Removes a table from the external catalog
+   * Removes a table from the external catalog
    */
   boolean removeTable(String schema, String table, boolean skipLocks);
 
   /**
    * Returns the schema in which this catalog is created
+   *
    * @return
    */
   public String catalogSchemaName();
@@ -84,10 +97,17 @@ public interface ExternalCatalog {
   public List<ExternalTableMetaData> getHiveTables(boolean skipLocks);
 
   /**
+   * Get the details of all the policies created.
+   */
+  public List<PolicyTableData> getPolicies(boolean skipLocks);
+
+  /**
    * Returns the meta data of the Hive Table
    */
   public ExternalTableMetaData getHiveTableMetaData(String schema, String tableName,
       boolean skipLocks);
+
+  void clearCache(String schemaName, String tableName);
 
   void close();
 }

@@ -55,7 +55,6 @@ import com.gemstone.gemfire.internal.cache.GemFireCacheImpl;
 import com.gemstone.gnu.trove.THashMap;
 import com.pivotal.gemfirexd.Attribute;
 import com.pivotal.gemfirexd.internal.engine.GfxdConstants;
-import com.pivotal.gemfirexd.internal.engine.Misc;
 import com.pivotal.gemfirexd.internal.engine.stats.ConnectionStats;
 import com.pivotal.gemfirexd.internal.engine.store.GemFireStore;
 import com.pivotal.gemfirexd.internal.iapi.db.Database;
@@ -177,6 +176,7 @@ public abstract class InternalDriver implements ModuleControl {
 		!url.startsWith(Attribute.DRDA_PROTOCOL) &&
 		!url.startsWith(Attribute.SNAPPY_DRDA_PROTOCOL) &&
 		!url.startsWith(Attribute.SNAPPY_THRIFT_PROTOCOL) &&
+		!url.startsWith(Attribute.SNAPPY_POOL_PROTOCOL) &&
                 // SQLF:BC
                 !url.startsWith(Attribute.SQLF_DNC_PROTOCOL) &&
 		(url.startsWith(Attribute.PROTOCOL)
@@ -357,7 +357,30 @@ public abstract class InternalDriver implements ModuleControl {
 			if (conn.isClosed()) {
 				return null;
 			}
-			
+
+			// support for "use:database" property to set default schema
+			String defaultSchema = finfo.getProperty("use:database");
+			if (defaultSchema != null) {
+				finfo.setProperty(Attribute.DEFAULT_SCHEMA, defaultSchema);
+			}
+			// set defaults for Spark/SnappyData properties on the session
+			if (Boolean.parseBoolean(finfo.getProperty(Attribute.ROUTE_QUERY))) {
+				java.sql.Statement stmt = null;
+				for (String p : finfo.stringPropertyNames()) {
+					if (p.startsWith("spark.") || p.startsWith("snappydata.")) {
+						String v = finfo.getProperty(p);
+						if (v != null) {
+							if (stmt == null) {
+								stmt = conn.createStatement();
+							}
+							stmt.executeUpdate("set " + p + " = " + v);
+						}
+					}
+				}
+				if (stmt != null) {
+					stmt.close();
+				}
+			}
 			{
                           if (isolationLevel == Connection.TRANSACTION_NONE) {
                             conn.setAutoCommit(false, false);

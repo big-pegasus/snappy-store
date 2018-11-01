@@ -174,9 +174,9 @@ public final class FabricDatabase implements ModuleControl,
   private volatile boolean active;
 
   /** DOCUMENT ME! */
-  private AuthenticationService authenticationService;
+  private AuthenticationServiceBase authenticationService;
 
-  private AuthenticationService peerAuthenticationService;
+  private AuthenticationServiceBase peerAuthenticationService;
 
   /** The {@link GemFireStore} of booted database. */
   protected GemFireStore memStore;
@@ -251,6 +251,9 @@ public final class FabricDatabase implements ModuleControl,
   /** to allow skipping of index sanity check on restart */
   public static boolean skipIndexCheck = SystemProperties.getServerInstance().getBoolean(
       com.pivotal.gemfirexd.Property.DDLREPLAY_NO_INDEX_CHECK, false);
+
+  public static final boolean disallowMetastoreOnLocator = SystemProperties.getServerInstance().getBoolean(
+          "snappydata.DISALLOW_METASTORE_ON_LOCATOR", false);
 
   /**
    * Creates a new FabricDatabase object.
@@ -601,7 +604,7 @@ public final class FabricDatabase implements ModuleControl,
               try {
                 GemFireXDUtils.waitForNodeInitialization();
                 embedConnection = GemFireXDUtils.createNewInternalConnection(
-                    false);
+                    false, EmbedConnection.UNINITIALIZED);
                 checkSnappyCatalogConsistency(embedConnection, true, false);
                 // publish the column table stats at this point because that
                 // requires the hive metastore
@@ -719,14 +722,14 @@ public final class FabricDatabase implements ModuleControl,
         storeTablesList.removeAll(hiveTableList);
       }
       if (!storeTablesList.isEmpty()) {
-        SanityManager.DEBUG_PRINT("warning",
+        SanityManager.DEBUG_PRINT("warning:CATALOG",
             "Catalog inconsistency detected: following tables " +
                 "in datadictionary are not in Hive metastore: " +
                 "schema = " + storeEntry.getKey() + " tables = " + storeTablesList);
         if (removeInconsistentEntries) {
           dropTables(embedConn, storeEntry.getKey(), storeTablesList, removeTablesWithData);
         } else {
-          SanityManager.DEBUG_PRINT("warning",
+          SanityManager.DEBUG_PRINT("warning:CATALOG",
               "Use system procedure SYS.REPAIR_CATALOG() to remove inconsistency");
         }
       }
@@ -746,7 +749,7 @@ public final class FabricDatabase implements ModuleControl,
         }
       }
       if (!tablesMissingColumnBuffer.isEmpty()) {
-        SanityManager.DEBUG_PRINT("warning",
+        SanityManager.DEBUG_PRINT("warning:CATALOG",
             "Catalog inconsistency detected: following column tables " +
                 "do not have column buffer: " +
                 "schema = " + storeEntry.getKey() + " tables = " + tablesMissingColumnBuffer);
@@ -755,7 +758,7 @@ public final class FabricDatabase implements ModuleControl,
           removeTableFromHivestore(storeEntry.getKey(),
               tablesMissingColumnBuffer, externalCatalog);
         } else {
-          SanityManager.DEBUG_PRINT("warning",
+          SanityManager.DEBUG_PRINT("warning:CATALOG",
               "Use system procedure SYS.REPAIR_CATALOG() to remove inconsistency");
         }
       }
@@ -787,7 +790,7 @@ public final class FabricDatabase implements ModuleControl,
       }
 
       if (!hiveTableList.isEmpty()) {
-        SanityManager.DEBUG_PRINT("warning",
+        SanityManager.DEBUG_PRINT("warning:CATALOG",
             "Catalog inconsistency detected: following tables " +
                 "in Hive metastore are not in datadictionary: " +
                 "schema = " + hiveEntry.getKey() + " tables = " + hiveTableList);
@@ -795,7 +798,7 @@ public final class FabricDatabase implements ModuleControl,
           removeTableFromHivestore(hiveEntry.getKey(), hiveTableList,
               externalCatalog);
         } else {
-          SanityManager.DEBUG_PRINT("warning",
+          SanityManager.DEBUG_PRINT("warning:CATALOG",
               "Use system procedure SYS.REPAIR_CATALOG() to remove inconsistency");
         }
       }
@@ -805,7 +808,7 @@ public final class FabricDatabase implements ModuleControl,
   private static final void removeTableFromHivestore(String schema,
       List<String> tables, ExternalCatalog externalCatalog) {
     for (String table : tables) {
-      SanityManager.DEBUG_PRINT("warning", "Removing table " +
+      SanityManager.DEBUG_PRINT("warning:CATALOG", "Removing table " +
           schema + "." + table + " from Hive metastore");
       externalCatalog.removeTable(schema, table, false);
     }
@@ -816,7 +819,7 @@ public final class FabricDatabase implements ModuleControl,
     for (String table : tables) {
       try {
         String tableName = schema + "." + table;
-        SanityManager.DEBUG_PRINT("warning", "FabricDatabase.dropTables " +
+        SanityManager.DEBUG_PRINT("warning:CATALOG", "FabricDatabase.dropTables " +
             " processing " + tableName);
 
         // drop column batch table
@@ -833,13 +836,13 @@ public final class FabricDatabase implements ModuleControl,
               Misc.getRegionForTable(tableName, false);
           boolean tableContainsData = (columnBuffer.size() != 0) || (rowBuffer != null && rowBuffer.size() != 0);
           if (!tableContainsData || (tableContainsData && removeTablesWithData)) {
-            SanityManager.DEBUG_PRINT("warning", "Dropping table " +
+            SanityManager.DEBUG_PRINT("warning:CATALOG", "Dropping table " +
                 columnBatchTableName);
             embedConn.createStatement().execute(
                 "DROP TABLE IF EXISTS " + columnBatchTableName);
           } else {
             columnBatchTableExists = true;
-            SanityManager.DEBUG_PRINT("warning", "Not dropping table " +
+            SanityManager.DEBUG_PRINT("warning:CATALOG", "Not dropping table " +
                 columnBatchTableName + " as it is not empty");
           }
         }
@@ -882,6 +885,7 @@ public final class FabricDatabase implements ModuleControl,
     }
     return gfDBTablesMap;
   }
+
 
   /**
    * Replays the initial DDL received by GII from other nodes or recovered from
@@ -1122,7 +1126,8 @@ public final class FabricDatabase implements ModuleControl,
             final DDLConflatable conflatable = (DDLConflatable)qVal;
             String schemaForTable = conflatable.getSchemaForTableNoThrow();
             if (this.memStore.restrictedDDLStmtQueue() &&
-                !(schemaForTable != null && Misc.isSnappyHiveMetaTable(schemaForTable))) {
+                !(!disallowMetastoreOnLocator &&
+                    schemaForTable != null && Misc.isSnappyHiveMetaTable(schemaForTable))) {
               continue;
             }
             // check for any merged DDLs
@@ -1940,6 +1945,17 @@ public final class FabricDatabase implements ModuleControl,
     return lctx;
   }
 
+  private static String getSchemaOwner(String in_defaultSchema) {
+    String owner = in_defaultSchema;
+    GemFireStore ms = Misc.getMemStoreBootingNoThrow();
+    if (ms != null) {
+      if (ms.isSnappyStore() && !ms.tableCreationAllowed() && Misc.isSecurityEnabled()) {
+        owner = ms.getDatabase().getDataDictionary().getAuthorizationDatabaseOwner();
+      }
+    }
+    return owner;
+  }
+
   /**
    * Setup the default schema for the given "defaultSchema" creating it if necessary.
    */
@@ -1951,7 +1967,8 @@ public final class FabricDatabase implements ModuleControl,
       defaultSchema = dd.getSchemaDescriptor(in_defaultSchema, tc, false);
     }
     if (defaultSchema == null) {
-      defaultSchema = new SchemaDescriptor(dd, in_defaultSchema, in_defaultSchema, dd
+      String schemaOwner = getSchemaOwner(in_defaultSchema);
+      defaultSchema = new SchemaDescriptor(dd, in_defaultSchema, schemaOwner, dd
           .getUUIDFactory().createUUID(), false);
       try {
         dd.addDescriptor(defaultSchema, null,
@@ -2001,7 +2018,7 @@ public final class FabricDatabase implements ModuleControl,
     new DatabaseContextImpl(cm, this);
   }
 
-  public final AuthenticationService getAuthenticationService() {
+  public final AuthenticationServiceBase getAuthenticationService() {
 
     // Expected to find one - Sanity check being done at
     // DB boot-up.
@@ -2017,17 +2034,7 @@ public final class FabricDatabase implements ModuleControl,
     return this.authenticationService;
   }
 
-  /**
-   * @throws com.gemstone.gemfire.cache.CacheClosedException if store is null
-   * @return
-   */
-  public static AuthenticationServiceBase getAuthenticationServiceBase() {
-    return (AuthenticationServiceBase)Monitor.findServiceModule(
-        Misc.getMemStoreBooting().getDatabase(), AuthenticationService.MODULE,
-        GfxdConstants.AUTHENTICATION_SERVICE);
-  }
-
-  public final AuthenticationService getPeerAuthenticationService() {
+  public final AuthenticationServiceBase getPeerAuthenticationService() {
 
     // Expected to find one - Sanity check being done at
     // DB boot-up.
@@ -2485,18 +2492,16 @@ public final class FabricDatabase implements ModuleControl,
    *
    * @throws  StandardException  DOCUMENT ME!
    */
-  protected AuthenticationService bootAuthenticationService(boolean create,
-                                                            Properties props)
+  protected AuthenticationServiceBase bootAuthenticationService(boolean create,
+                                                                Properties props)
   throws StandardException {
 
-    peerAuthenticationService = (AuthenticationService)Monitor.bootServiceModule(create, this, AuthenticationService.MODULE,
+    peerAuthenticationService = (AuthenticationServiceBase)Monitor.bootServiceModule(create, this, AuthenticationService.MODULE,
         GfxdConstants.PEER_AUTHENTICATION_SERVICE, props);
 
-    assert peerAuthenticationService instanceof AuthenticationServiceBase;
+    AuthenticationServiceBase.setPeerAuthenticationService(peerAuthenticationService);
 
-    AuthenticationServiceBase.setPeerAuthenticationService((AuthenticationServiceBase)peerAuthenticationService);
-
-    return (AuthenticationService)Monitor.bootServiceModule(create, this,
+    return (AuthenticationServiceBase)Monitor.bootServiceModule(create, this,
         AuthenticationService.MODULE, GfxdConstants.AUTHENTICATION_SERVICE, props);
   }
 

@@ -2904,6 +2904,7 @@ TOKEN [IGNORE_CASE] :
 |	<YEAR: "year">
 |	<JSON: "json">
 |	<CLOB_STRING: "string">
+|	<USE: "use">
 // GemStone changes END
 }
 
@@ -4002,6 +4003,11 @@ spsSetStatement() throws StandardException :
             statementNode = setMessageLocaleStatement() |
             statementNode = setRoleStatement()
         )
+	{
+		return statementNode;
+	}
+|
+	<USE> statementNode = setSchemaValues()
 	{
 		return statementNode;
 	}
@@ -11440,6 +11446,7 @@ schemaDefinition() throws StandardException :
 		new ServerGroupsTableAttribute();
 // GemStone changes END
 	String	authName = null;
+	String	groupName = null;
 }
 {
 	/*
@@ -11448,17 +11455,22 @@ schemaDefinition() throws StandardException :
 	** specifications for schema, or schema bodies.
 	*/
 	<SCHEMA>
-	(	schemaName = identifier(Limits.MAX_IDENTIFIER_LENGTH, true)  [ <AUTHORIZATION> authName = identifier(Limits.MAX_IDENTIFIER_LENGTH, true) ]
+	( schemaName = identifier(Limits.MAX_IDENTIFIER_LENGTH, true)
+	    [ <AUTHORIZATION> [ <LDAPGROUP> <COLON> groupName = identifier(Limits.MAX_IDENTIFIER_LENGTH, true)
+			| authName = identifier(Limits.MAX_IDENTIFIER_LENGTH, true) ] ]
 // GemStone changes BEGIN
 			[ <_DEFAULT> serverGroupDefinition(defaultServerGroups) ]
 // GemStone change END
 		{
-			if (authName != null)
+			if (authName != null || groupName != null)
 				checkVersion( DataDictionary.DD_VERSION_DERBY_10_2, "AUTHORIZATION");
 
 			if (schemaName.startsWith("SYS"))
 				throw StandardException.newException(SQLState.INVALID_SCHEMA_SYS, schemaName);
  
+			if (groupName != null)
+				authName = Constants.LDAP_GROUP_PREFIX + groupName;
+
 			return (StatementNode) nodeFactory.getNode(
 					C_NodeTypes.CREATE_SCHEMA_NODE,
 					schemaName,
@@ -16291,8 +16303,13 @@ dropSchemaStatement() throws StandardException :
         // GemStone changes END
 }
 {
-  	// GemStone changes BEGIN
-  	<SCHEMA >
+	// GemStone changes BEGIN
+	<SCHEMA>
+	{
+		CompilerContext cc = getCompilerContext();
+		cc.markAsDDLForSnappyUse(true);
+		cc.setForcedDDLrouting(true);
+	}
   	[<IF> <EXISTS>  	{
   	  onlyIfExists = Boolean.TRUE;  	}]
   	schemaName = identifier(Limits.MAX_IDENTIFIER_LENGTH, true) <RESTRICT>
@@ -18236,9 +18253,10 @@ nonReservedKeyword()  :
 	|   tok = <MAXWRITEONLYFILESIZE>
  	|   tok = <WRITEONLYFILEROLLOVERINTERVAL>
  	|	tok = <PUT>
- 	|   tok = <JSON>
- 	|   tok = <SPARKHASH>
- 	|   tok = <CLOB_STRING>
+	|   tok = <JSON>
+	|   tok = <SPARKHASH>
+	|   tok = <CLOB_STRING>
+	|   tok = <USE>
 
 // GemStone changes END
 	)

@@ -147,7 +147,9 @@ import com.gemstone.gemfire.internal.offheap.SimpleMemoryAllocatorImpl.ChunkType
 import com.gemstone.gemfire.internal.shared.BufferAllocator;
 import com.gemstone.gemfire.internal.shared.ClientSharedUtils;
 import com.gemstone.gemfire.internal.shared.HeapBufferAllocator;
+import com.gemstone.gemfire.internal.shared.LauncherBase;
 import com.gemstone.gemfire.internal.shared.NativeCalls;
+import com.gemstone.gemfire.internal.shared.unsafe.UnsafeHolder;
 import io.snappydata.collection.OpenHashSet;
 import com.gemstone.gemfire.internal.shared.SystemProperties;
 import com.gemstone.gemfire.internal.shared.Version;
@@ -484,6 +486,7 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
   
   private final Object offHeapEvictorLock = new Object();
 
+  private final long memorySize;
   private final BufferAllocator bufferAllocator;
 
   private ResourceEventsListener listener;
@@ -750,6 +753,10 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
     }
   }
 
+  public boolean isGFEConnectorBucketMovedException(Throwable th) {
+    return false;
+  }
+
   public Map getOldEntriesForRegion(String regionName) {
     return oldEntryMap.get(regionName);
   }
@@ -831,7 +838,7 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
        synchronized (oldEntryMap) {
         for (Map<Object, BlockingQueue<RegionEntry>> regionEntryMap : oldEntryMap.values()) {
           for (Entry<Object, BlockingQueue<RegionEntry>> entry : regionEntryMap.entrySet()) {
-            if (entry.getValue().size() == 0) {
+            if (entry.getValue().isEmpty()) {
               regionEntryMap.remove(entry.getKey());
               if (getLoggerI18n().fineEnabled()) {
                 getLoggerI18n().fine(
@@ -852,7 +859,6 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
     }
   }
 
-  private long memorySize;
   /**
    * disables automatic eviction configuration for HDFS regions
    */
@@ -1163,6 +1169,16 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
       // set the buffer allocator for the cache (off-heap or heap)
       String memorySizeStr = getSystem().getConfig().getMemorySize();
       long memorySize = ClientSharedUtils.parseMemorySize(memorySizeStr, 0L, 0);
+      boolean usingDefaultMemorySize = false;
+      if (memorySize == 0 && (memorySizeStr == null || memorySizeStr.isEmpty())
+          && GemFireVersion.isEnterpriseEdition()) {
+        memorySize = getDefaultOffHeapSize();
+        if (memorySize > 0) {
+          getLogger().info("Using default off-heap size = " +
+              ((double)memorySize / LauncherBase.oneGB) + "GB");
+          usingDefaultMemorySize = true;
+        }
+      }
       if (memorySize == 0) {
         // check in callbacks
         StoreCallbacks callbacks = CallbackFactoryProvider.getStoreCallbacks();
@@ -1170,23 +1186,47 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
             callbacks.getStoragePoolSize(true);
       }
       if (memorySize > 0) {
-        this.memorySize = memorySize;
         if (!GemFireVersion.isEnterpriseEdition()) {
           throw new IllegalArgumentException("The off-heap column store (enabled by property " +
               "memory-size) is not supported in SnappyData OSS version.");
         }
+        BufferAllocator bufferAllocator;
         try {
           Class<?> clazz = Class.forName("com.gemstone.gemfire.internal.cache.store.ManagedDirectBufferAllocator");
           Method method = clazz.getDeclaredMethod("instance");
-          this.bufferAllocator = (DirectBufferAllocator)method.invoke(null);
+          bufferAllocator = (DirectBufferAllocator)method.invoke(null);
+          // test availability of configured memory-size
+          getLogger().info("Configuring off-heap memory-size = " + memorySize);
+          long address = UnsafeHolder.getUnsafe().allocateMemory(memorySize);
+          UnsafeHolder.getUnsafe().freeMemory(address);
+          getLogger().info("Enabled memory-size = " + memorySize);
         } catch (ClassNotFoundException | NoSuchMethodException | IllegalAccessException |
             InvocationTargetException e) {
-          throw new IllegalStateException("Could not configure managed buffer allocator.", e);
+          if (usingDefaultMemorySize) {
+            memorySize = 0;
+            bufferAllocator = HeapBufferAllocator.instance();
+          } else {
+            throw new IllegalStateException("Could not configure managed buffer allocator.", e);
+          }
+        } catch (OutOfMemoryError oome) {
+          if (usingDefaultMemorySize) {
+            memorySize = 0;
+            bufferAllocator = HeapBufferAllocator.instance();
+            // log a warning
+            getLogger().warning("DISABLED off-heap because default memory-size = " +
+                memorySize + " cannot be allocated: " + oome);
+          } else {
+            throw new IllegalStateException("Provided memory-size = " + memorySize +
+                " is too large: " + oome + ". Please configure a lower value.");
+          }
         }
+        this.memorySize = memorySize;
+        this.bufferAllocator = bufferAllocator;
       } else if (memorySize < 0) {
         throw new IllegalArgumentException("Invalid memory-size: " + memorySizeStr);
       } else {
         // the allocation sizes will be initialized from the heap size
+        this.memorySize = 0;
         this.bufferAllocator = HeapBufferAllocator.instance();
       }
 
@@ -1233,6 +1273,28 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
     } // synchronized
   }
 
+  private long getDefaultOffHeapSize() {
+    // only set when started via launcher
+    CacheServerLauncher launcher = CacheServerLauncher.getCurrentInstance();
+    // a negative value of numLeads indicates that one or more leads have
+    // been started with explicit heap-size/memory-size setting in which case
+    // auto-configuration of memory-size is disabled to keep things simpler
+    int numLeads = Integer.getInteger("snappydata.numLeadsOnNode", 1);
+    if (launcher != null && launcher.hostData() && numLeads >= 0) {
+      long ramSize = LauncherBase.getPhysicalRAMSize();
+      // use up-to 75% of total RAM for hosts having sufficiently large RAMs
+      if (ramSize > LauncherBase.LARGE_RAM_LIMIT) {
+        long usableSize = (ramSize - Runtime.getRuntime().maxMemory()) * 3 / 4;
+        // reserve space for any leads started on this node
+        long reserved = numLeads > 0 ? numLeads * 1048576L *
+            LauncherBase.getDefaultHeapSizeMB(ramSize, false) : 0L;
+        // round to nearest GB
+        return Math.max(((usableSize - reserved + (1L << 29L)) >>> 30L) << 30L, 0L);
+      }
+    }
+    return 0L;
+  }
+
   final RawValueFactory getRawValueFactory() {
     return FactoryStatics.rawValueFactory;
   }
@@ -1276,6 +1338,10 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
    */
   public Pool getDefaultPool() {
     return this.defaultPool;
+  }
+
+  public boolean isSnappyConnectorCache() {
+    return false;
   }
 
   private void setDefaultPool(Pool v) {
@@ -3360,10 +3426,27 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
       } catch (RedundancyAlreadyMetException e) {
         // don't log this
         throw e;
-      } catch (final RuntimeException validationException) {
+      } catch (final Exception validationException) {
         getLoggerI18n().warning(LocalizedStrings.GemFireCache_INITIALIZATION_FAILED_FOR_REGION_0, rgn.getFullPath(),
             validationException);
         throw validationException;
+      } catch (Error e) {
+        getLoggerI18n().warning(LocalizedStrings.GemFireCache_INITIALIZATION_FAILED_FOR_REGION_0,
+            rgn.getFullPath(), e);
+        // don't try cleanup for any of the fatal errors below
+        // else they themselves can get stuck
+        success = true;
+        if (SystemFailure.isJVMFailureError(e)) {
+          SystemFailure.initiateFailure(e);
+          // If this ever returns, rethrow the error. We're poisoned
+          // now, so don't let this thread continue.
+          throw e;
+        }
+        SystemFailure.checkFailure();
+        // do cleanup for any non-fatal errors
+        success = false;
+        stopper.checkCancelInProgress(e);
+        throw e;
       } finally {
         if (!success) {
           try {
@@ -6302,6 +6385,21 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
 
   public final DM getDistributionManager() {
     return this.dm;
+  }
+
+  /**
+   * Get a thread-pool for background execution. On normal DMs it will be the
+   * waiting thread pool which can have any size, or else in loner DMs (that
+   * don't have most execution thread pools) it will be the disk write pool
+   * that is a proper background thread pool even in loner DMs.
+   */
+  public final ThreadPoolExecutor getWaitingThreadPoolOrDiskWritePool() {
+    if (getDistributionManager().isLoner()) {
+      return getDiskDelayedWritePool();
+    } else {
+      return (ThreadPoolExecutor)getDistributionManager()
+          .getWaitingThreadPool();
+    }
   }
 
   public GatewaySenderFactory createGatewaySenderFactory(){
