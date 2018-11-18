@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 SnappyData, Inc. All rights reserved.
+ * Copyright (c) 2018 SnappyData, Inc. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -18,23 +18,30 @@
 package com.pivotal.gemfirexd.internal.engine.ui;
 
 public class SnappyExternalTableStats {
+  private String tableFullyQualifiedName;
   private String tableName;
   private String tableType;
+  private Object schema;
   private String provider;
   private String dataSourcePath;
   private String driverClass;
   private Object externalStore;
 
-  public SnappyExternalTableStats(String tableName, String tableType,
+  public SnappyExternalTableStats(String tableName, String tableType, Object schema,
       String provider, Object externalStore, String dataSourcePath, String driverClass) {
     this.tableName = tableName;
     this.tableType = tableType;
+    this.schema = schema;
+    this.tableFullyQualifiedName = schema.toString().concat(".").concat(tableName);
     this.provider = provider;
     this.externalStore = externalStore;
     this.dataSourcePath = dataSourcePath;
     this.driverClass = driverClass;
   }
 
+  public String getTableFullyQualifiedName() {
+    return tableFullyQualifiedName;
+  }
 
   public String getTableName() {
     return tableName;
@@ -42,6 +49,10 @@ public class SnappyExternalTableStats {
 
   public String getTableType() {
     return tableType;
+  }
+
+  public Object getSchema() {
+    return schema;
   }
 
   public String getProvider() {
