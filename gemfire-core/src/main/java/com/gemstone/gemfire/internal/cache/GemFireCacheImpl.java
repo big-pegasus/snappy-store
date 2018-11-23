@@ -648,9 +648,10 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
       region.acquirePoolMemory(0, oldRe.getValueSize(), oldRe.isForDelete(), null, true);
     }
 
-    if(getLoggerI18n().fineEnabled()) {
-      getLoggerI18n().fine("For " + regionPath + " adding " +
-          oldRe + " to oldEntrMap");
+    if (getLoggerI18n().fineEnabled()) {
+      getLoggerI18n().info(LocalizedStrings.DEBUG, "For " + regionPath + " adding " +
+          oldRe + " to oldEntrMap" + ". The entry in region is " + newEntry + " version in region " +
+          newEntry.getVersionStamp().getEntryVersion());
     }
 
     Map<Object, BlockingQueue<RegionEntry>> snapshot = this.oldEntryMap.get(regionPath);
@@ -672,7 +673,7 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
     }
 
     if (getLoggerI18n().fineEnabled()) {
-      getLoggerI18n().fine("For key  " + oldRe.getKeyCopy() + " " +
+      getLoggerI18n().info(LocalizedStrings.DEBUG, "For key  " + oldRe.getKeyCopy() + " " +
           "the entries are " + snapshot.get(oldRe.getKeyCopy()));
     }
   }
@@ -781,8 +782,8 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
         }
       };
 
-      getLoggerI18n().info(LocalizedStrings.DEBUG,
-          "Snapshot is enabled, starting the cleaner thread. with frequency " + OLD_ENTRIES_CLEANER_TIME_INTERVAL);
+      //getLoggerI18n().info(LocalizedStrings.DEBUG,
+      //    "Snapshot is enabled, starting the cleaner thread. with frequency " + OLD_ENTRIES_CLEANER_TIME_INTERVAL);
       oldEntryMapCleanerService = Executors.newScheduledThreadPool(1, oldEntryGCtf);
       oldEntryMapCleanerService.scheduleAtFixedRate(new OldEntriesCleanerThread(), 0, OLD_ENTRIES_CLEANER_TIME_INTERVAL,
           TimeUnit.MILLISECONDS);
@@ -795,26 +796,44 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
 
   class OldEntriesCleanerThread implements Runnable {
     // Keep each entry alive for at least 20 secs.
+
     public void run() {
       try {
         if (!oldEntryMap.isEmpty()) {
+          if (getTxManager().getHostedTransactionsInProgress().size() == 0) {
+            acquireWriteLockOnSnapshotRvv();
+            try {
+              if (getTxManager().getHostedTransactionsInProgress().size() == 0) {
+                oldEntryMap.clear();
+                return;
+              }
+            } finally {
+              releaseWriteLockOnSnapshotRvv();
+            }
+          }
+
           for (Entry<String,Map<Object, BlockingQueue<RegionEntry>>> entry : oldEntryMap.entrySet()) {
             Map<Object, BlockingQueue<RegionEntry>> regionEntryMap = entry.getValue();
             LocalRegion region = (LocalRegion)getRegion(entry.getKey());
             if (region == null) continue;
 
+            getLoggerI18n().info(LocalizedStrings.DEBUG, "The size of map for region " + region.getFullPath() +
+                " is " + regionEntryMap.size());
+
             for (Entry<Object, BlockingQueue<RegionEntry>> oldEntry: regionEntryMap.entrySet()) {
               Object key = oldEntry.getKey();
               BlockingQueue<RegionEntry> oldEntriesQueue = oldEntry.getValue();
 
+              //getLoggerI18n().info(LocalizedStrings.DEBUG,
+              //    "OldEntriesCleanerThread : The queue size is " + oldEntriesQueue.size() );
               for (RegionEntry re : oldEntriesQueue) {
                 if (re.isUpdateInProgress()) {
                   continue;
                 } else {
-                  if (notRequiredByAnyTx(oldEntriesQueue, region, re)) {
-                    if (getLoggerI18n().fineEnabled()) {
-                      getLoggerI18n().fine(
-                          "OldEntriesCleanerThread : Removing the entry " + re );
+                  if (notRequiredByAnyTx(oldEntriesQueue, (LocalRegion)region, re)) {
+                    if (true /*getLoggerI18n().fineEnabled()*/) {
+                      //getLoggerI18n().info(LocalizedStrings.DEBUG,
+                      //    "OldEntriesCleanerThread : Removing the entry " + re );
                     }
                     // continue if some explicit call removed the entry
                     if (!oldEntriesQueue.remove(re)) continue;
@@ -862,10 +881,10 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
     }
 
     boolean notRequiredByAnyTx(BlockingQueue<RegionEntry> queue,
-        Region region, RegionEntry re) {
+        LocalRegion region, RegionEntry re) {
+      //getLoggerI18n().info(LocalizedStrings.DEBUG,"OldEntriesCleanerThread: Getting called for re " + re);
       int myVersion = re.getVersionStamp().getEntryVersion();
       Set<TXId> txIds = new OpenHashSet<TXId>(4);
-
       for (TXStateProxy txProxy : getTxManager().getHostedTransactionsInProgress()) {
         TXState txState = txProxy.getLocalTXState();
         if ((txState != null && !txState.isClosed() && TXState.checkEntryInSnapshot
@@ -875,8 +894,10 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
       }
 
       for (RegionEntry regionEntry : queue) {
-        if (regionEntry == re)
+        if (regionEntry == re) {
           continue;
+        }
+
         Set<TXId> othersTxIds = new OpenHashSet<TXId>(4);
         for (TXStateProxy txProxy : getTxManager().getHostedTransactionsInProgress()) {
           TXState txState = txProxy.getLocalTXState();
@@ -885,29 +906,50 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
             othersTxIds.add(txState.getTransactionId());
           }
         }
+        //getLoggerI18n().info(LocalizedStrings.DEBUG,"OldEntriesCleanerThread: The running txIds are "
+        //    + txIds + " and other txIds are " + othersTxIds);
+
+        //getLoggerI18n().info(LocalizedStrings.DEBUG, "Entryversion : " +
+        //    regionEntry.getVersionStamp().getEntryVersion() +
+        //" MyVersion is " + myVersion);
 
         if (txIds.equals(othersTxIds)
-            && regionEntry.getVersionStamp().getEntryVersion() > myVersion) {
+            && regionEntry.getVersionStamp().getEntryVersion() >= myVersion) {
           return true;
         }
       }
 
       // in the end check with the entry in region
-      RegionEntry entryInRegion = ((LocalRegion)region).entries.getEntry(re.getKey());
-      if (entryInRegion != null) {
-        Set<TXId> othersTxIds = new OpenHashSet<TXId>(4);
-        for (TXStateProxy txProxy : getTxManager().getHostedTransactionsInProgress()) {
-          TXState txState = txProxy.getLocalTXState();
-          if ((txState != null && !txState.isClosed() && TXState.checkEntryInSnapshot
-              (txState, region, entryInRegion))) {
-            othersTxIds.add(txState.getTransactionId());
-          }
-        }
+      RegionEntry entryInRegion = region.entries.getEntry(re.getKey());
+      //getLoggerI18n().info(LocalizedStrings.DEBUG,"OldEntriesCleanerThread: SKSK 1" +
+      //    " Entry in region " + entryInRegion);
+      if (entryInRegion == null) {
+        VersionTag versionTag = VersionTag.create(re.getVersionStamp().
+            asVersionTag().getMemberID());
+        versionTag.setEntryVersion(re.getVersionStamp().getEntryVersion() + 1);
+        versionTag.setRegionVersion(region.getVersionVector().getCurrentVersion());
+        entryInRegion = new NonLocalRegionEntry(re.getKey(), Token.TOMBSTONE, region, versionTag);
 
-        if (txIds.equals(othersTxIds)
-            && entryInRegion.getVersionStamp().getEntryVersion() > myVersion) {
-          return true;
+        //getLoggerI18n().info(LocalizedStrings.DEBUG,"OldEntriesCleanerThread: SKSK 2" +
+        //    " Entry in region " + entryInRegion);
+      } /*else {
+        getLoggerI18n().info(LocalizedStrings.DEBUG,"OldEntriesCleanerThread: SKSK1 " +
+            " Entry in region " + entryInRegion + " its version " +
+            entryInRegion.getVersionStamp().getEntryVersion()
+            + " myVersion " + myVersion + " myRE " + re);
+      }*/
+
+      Set<TXId> othersTxIds = new OpenHashSet<TXId>(4);
+      for (TXStateProxy txProxy : getTxManager().getHostedTransactionsInProgress()) {
+        TXState txState = txProxy.getLocalTXState();
+        if ((txState != null && !txState.isClosed() && TXState.checkEntryInSnapshot
+            (txState, region, entryInRegion))) {
+          othersTxIds.add(txState.getTransactionId());
         }
+      }
+
+      if (txIds.equals(othersTxIds)) {
+        return true;
       }
 
       return false;
