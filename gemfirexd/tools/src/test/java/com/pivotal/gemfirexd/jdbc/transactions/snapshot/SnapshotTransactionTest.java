@@ -85,7 +85,7 @@ public class SnapshotTransactionTest  extends JdbcTestBase {
 
     System.out.println("rvv " + rvv.fullToString());
 
-    System.out.println("SKSK Contains " + rvv.contains(id1, 758));
+    System.out.println("RVV Contains " + rvv.contains(id1, 758));
 
     rvv.recordVersion(id1, 760);
 
@@ -95,8 +95,7 @@ public class SnapshotTransactionTest  extends JdbcTestBase {
 
     System.out.println("rvv " + rvv.fullToString());
 
-    System.out.println("SKSK Contains " + rvv.contains(id1, 758));
-
+    System.out.println("RVV Contains " + rvv.contains(id1, 758));
   }
 
   // Currently autcommit is disabled
@@ -700,8 +699,8 @@ public class SnapshotTransactionTest  extends JdbcTestBase {
     Map<Object, BlockingQueue<RegionEntry>> entryMap = GemFireCacheImpl.getInstance().
         getOldEntriesForRegion("/__PR/_B__t1_0");
     for(Map.Entry e : entryMap.entrySet()) {
-      System.out.println("SKSK " + e.getKey());
-      //System.out.println("SKSK " + ((NonLocalRegionEntry)e.getValue())._getValue());
+      System.out.println("Key in oldEntriesMap: " + e.getKey());
+      System.out.println("Queue in oldEntriesMap " + e.getValue());
     }
 
     // commit one
@@ -717,8 +716,8 @@ public class SnapshotTransactionTest  extends JdbcTestBase {
     entryMap = GemFireCacheImpl.getInstance().
         getOldEntriesForRegion("/__PR/_B__t1_0");
     for(Map.Entry e : entryMap.entrySet()) {
-      System.out.println("SKSK after first commit " + e.getKey());
-      System.out.println("SKSK after first commit " + e.getValue());
+      System.out.println("Key after first commit " + e.getKey());
+      System.out.println("Queue after first commit " + e.getValue());
     }
 
     r1.getCache().getCacheTransactionManager().begin(IsolationLevel.SNAPSHOT, null);
@@ -769,8 +768,8 @@ public class SnapshotTransactionTest  extends JdbcTestBase {
     entryMap = GemFireCacheImpl.getInstance().
         getOldEntriesForRegion("/__PR/_B__t1_0");
     for(Map.Entry e : entryMap.entrySet()) {
-      System.out.println("SKSK after third commit " + e.getKey());
-      System.out.println("SKSK after third commit " + ((NonLocalRegionEntry)e.getValue())._getValue());
+      System.out.println("Key after third commit " + e.getKey());
+      System.out.println("Queue after third commit " + e.getValue());
     }
 
     synchronized (sync2) {
@@ -785,8 +784,8 @@ public class SnapshotTransactionTest  extends JdbcTestBase {
     entryMap = GemFireCacheImpl.getInstance().
         getOldEntriesForRegion("/__PR/_B__t1_0");
     for(Map.Entry e : entryMap.entrySet()) {
-      System.out.println("SKSK after second commit " + e.getKey());
-      System.out.println("SKSK after second commit " + e.getValue());
+      System.out.println("Key after second commit " + e.getKey());
+      System.out.println("Queue after second commit " + e.getValue());
     }
   }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 SnappyData, Inc. All rights reserved.
+ * Copyright (c) 2018 SnappyData, Inc. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -27,10 +27,13 @@ import com.gemstone.gemfire.internal.shared.Version;
 
 public class SnappyRegionStats implements VersionedDataSerializable {
 
+  private static final long serialVersionUID = -2793473664036745905L;
+
   private boolean isColumnTable = false;
   private String tableName;
   private long rowCount = 0;
   private long sizeInMemory = 0;
+  private long sizeSpillToDisk = 0;
   private long totalSize = 0;
   private boolean isReplicatedTable = false;
   private int bucketCount;
@@ -48,14 +51,11 @@ public class SnappyRegionStats implements VersionedDataSerializable {
     this.tableName = tableName;
     this.totalSize = totalSize;
     this.sizeInMemory = sizeInMemory;
+    this.sizeSpillToDisk = totalSize - sizeInMemory;
     this.rowCount = rowCount;
     this.isColumnTable = isColumnTable;
     this.isReplicatedTable = isReplicatedTable;
     this.bucketCount = bucketCount;
-  }
-
-  public void setTotalSize(long totalSize) {
-    this.totalSize = totalSize;
   }
 
   public String getTableName() {
@@ -99,8 +99,20 @@ public class SnappyRegionStats implements VersionedDataSerializable {
     this.sizeInMemory = sizeInMemory;
   }
 
+  public long getSizeSpillToDisk() {
+    return sizeSpillToDisk;
+  }
+
+  public void setSizeSpillToDisk(long sizeSpillToDisk) {
+    this.sizeSpillToDisk = sizeSpillToDisk;
+  }
+
   public long getTotalSize() {
     return this.totalSize;
+  }
+
+  public void setTotalSize(long totalSize) {
+    this.totalSize = totalSize;
   }
 
   public int getBucketCount() {
@@ -122,6 +134,7 @@ public class SnappyRegionStats implements VersionedDataSerializable {
     }
 
     combinedStats.setSizeInMemory(stats.sizeInMemory + this.sizeInMemory);
+    combinedStats.setSizeSpillToDisk(stats.sizeSpillToDisk + this.sizeSpillToDisk);
     combinedStats.setTotalSize(stats.totalSize + this.totalSize);
     combinedStats.setColumnTable(this.isColumnTable || stats.isColumnTable);
     combinedStats.setReplicatedTable(this.isReplicatedTable());
@@ -149,6 +162,7 @@ public class SnappyRegionStats implements VersionedDataSerializable {
   public void toData(final DataOutput out) throws IOException {
     toDataPre_STORE_1_6_2_0(out);
     out.writeInt(bucketCount);
+    out.writeLong(sizeSpillToDisk);
   }
 
   public void fromDataPre_STORE_1_6_2_0(DataInput in) throws IOException {
@@ -164,13 +178,14 @@ public class SnappyRegionStats implements VersionedDataSerializable {
   public void fromData(DataInput in) throws IOException {
     fromDataPre_STORE_1_6_2_0(in);
     this.bucketCount = in.readInt();
+    this.sizeSpillToDisk = in.readLong();
   }
 
   @Override
   public String toString() {
     return "RegionStats for " + tableName + ": totalSize=" + totalSize +
-        " sizeInMemory=" + sizeInMemory + " rowCount=" + rowCount +
-        " isColumnTable=" + isColumnTable + " isReplicatedTable=" +
+        " sizeInMemory=" + sizeInMemory + " sizeSpillToDisk=" + sizeSpillToDisk +
+        " rowCount=" + rowCount + " isColumnTable=" + isColumnTable + " isReplicatedTable=" +
         isReplicatedTable + " bucketCount=" + bucketCount;
   }
 }

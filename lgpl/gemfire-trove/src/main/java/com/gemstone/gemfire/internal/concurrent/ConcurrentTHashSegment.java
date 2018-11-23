@@ -217,13 +217,14 @@ final class ConcurrentTHashSegment<E> extends ReentrantReadWriteLock implements
       Object old = set[index];
       this.newValueInsert = true;
       Object e = valueCreator.newValue(key, context, createParams, this);
-      if (this.newValueInsert) {
-        set[index] = e;
+      if (e != null) {
+        if (this.newValueInsert) {
+          set[index] = e;
 
-        postInsertHook(old == null);
+          postInsertHook(old == null);
+        }
         return e;
-      }
-      else {
+      } else {
         return null;
       }
     } finally {

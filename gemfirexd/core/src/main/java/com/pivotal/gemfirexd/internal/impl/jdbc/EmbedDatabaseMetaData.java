@@ -40,14 +40,6 @@
 
 package com.pivotal.gemfirexd.internal.impl.jdbc;
 
-
-
-
-
-
-
-
-
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
 import java.sql.DatabaseMetaData;
@@ -73,6 +65,7 @@ import com.pivotal.gemfirexd.internal.iapi.services.sanity.SanityManager;
 import com.pivotal.gemfirexd.internal.iapi.sql.conn.LanguageConnectionContext;
 import com.pivotal.gemfirexd.internal.iapi.sql.dictionary.DataDictionary;
 import com.pivotal.gemfirexd.internal.iapi.sql.dictionary.SPSDescriptor;
+import com.pivotal.gemfirexd.internal.iapi.util.StringUtil;
 import com.pivotal.gemfirexd.internal.impl.sql.execute.GenericConstantActionFactory;
 import com.pivotal.gemfirexd.internal.impl.sql.execute.GenericExecutionFactory;
 
@@ -1799,40 +1792,47 @@ public class EmbedDatabaseMetaData extends ConnectionChild
 		//GemStone changes END
 
 		if (types == null)  {// null means all types 
-			types = new String[] {"ROW TABLE","VIEW","SYNONYM","SYSTEM TABLE"
-			/* GemStone changes BEGIN */, "COLUMN TABLE",
-			"EXTERNAL TABLE", "STREAM TABLE", "SAMPLE TABLE", "TOPK TABLE", "VIRTUAL TABLE",
-			/* GemStone changes END */};
+			types = new String[] {"TABLE","VIEW","SYNONYM","SYSTEM TABLE","VIRTUAL TABLE"};
 		}
 		String[] typeParams = new String[numberOfTableTypesInDerby];
 		for (int i=0; i < numberOfTableTypesInDerby;i++)
 			typeParams[i] = null;
 		
-		for (int i = 0; i<types.length; i++){
-			if ("TABLE".equals(types[i]) || "ROW TABLE".equals(types[i]) || "ROW_TABLE".equals(types[i]))
+		for (int i = 0; i<types.length; i++) {
+			String type = StringUtil.SQLToUpperCase(types[i].trim());
+			// TABLE refers to all table types except system and virtual tables
+			if ("TABLE".equals(type)) {
 				typeParams[0] = "T";
-			else if ("VIEW".equals(types[i])) {
+				typeParams[4] = "COLUMN";
+				typeParams[5] = "EXTERNAL";
+				typeParams[6] = "STREAM";
+				typeParams[7] = "SAMPLE";
+				typeParams[8] = "TOPK";
+			}
+			else if ("ROW TABLE".equals(type) || "ROW_TABLE".equals(type))
+				typeParams[0] = "T";
+			else if ("VIEW".equals(type)) {
 				typeParams[1] = "V";
 				typeParams[9] = "VIEW"; // for hive-metastore tables
 			}
-			else if ("SYNONYM".equals(types[i]))
+			else if ("SYNONYM".equals(type))
 				typeParams[2] = "A";
-			else if ("SYSTEM TABLE".equals(types[i]) ||
-					"SYSTEM_TABLE".equals(types[i])) // Keep SYSTEM_TABLE since this is how we have been testing
+			else if ("SYSTEM TABLE".equals(type) ||
+					"SYSTEM_TABLE".equals(type)) // Keep SYSTEM_TABLE since this is how we have been testing
 					typeParams[3] = "S";
 			//GemStone changes BEGIN
-			else if ("COLUMN TABLE".equals(types[i]) ||
-			    "COLUMN_TABLE".equals(types[i])) // In case we treat it like SYSTEM_TABLE
+			else if ("COLUMN TABLE".equals(type) ||
+			    "COLUMN_TABLE".equals(type)) // In case we treat it like SYSTEM_TABLE
 			    typeParams[4] = "COLUMN";
-			else if ("EXTERNAL TABLE".equals(types[i]) || "EXTERNAL_TABLE".equals(types[i]) )
+			else if ("EXTERNAL TABLE".equals(type) || "EXTERNAL_TABLE".equals(type) )
 			    typeParams[5] = "EXTERNAL";
-			else if ("STREAM TABLE".equals(types[i]) || "STREAM_TABLE".equals(types[i]) )
+			else if ("STREAM TABLE".equals(type) || "STREAM_TABLE".equals(type) )
 			    typeParams[6] = "STREAM";
-			else if ("SAMPLE TABLE".equals(types[i]) || "SAMPLE_TABLE".equals(types[i]))
+			else if ("SAMPLE TABLE".equals(type) || "SAMPLE_TABLE".equals(type))
 			    typeParams[7] = "SAMPLE";
-			else if ("TOPK TABLE".equals(types[i]) || "TOPK_TABLE".equals(types[i]))
+			else if ("TOPK TABLE".equals(type) || "TOPK_TABLE".equals(type))
 			    typeParams[8] = "TOPK";
-			else if ("VIRTUAL TABLE".equals(types[i]) || "VIRTUAL_TABLE".equals(types[i]))
+			else if ("VIRTUAL TABLE".equals(type) || "VIRTUAL_TABLE".equals(type))
 			    hasVTI = true;
 			//GemStone changes END
 			// If user puts in other types we simply ignore.

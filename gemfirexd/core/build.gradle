@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 SnappyData, Inc. All rights reserved.
+ * Copyright (c) 2018 SnappyData, Inc. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -180,6 +180,7 @@ task odbcMeta {
   def metaDir = file("${buildDir}/classes/main/com/pivotal/gemfirexd/internal/impl/jdbc")
   outputs.file "${metaDir}/metadata.properties"
   inputs.dir "${projectDir}/../prebuild/src/main/resources/com/pivotal/gemfirexd/internal/impl/jdbc"
+  inputs.dir "${projectDir}/../prebuild/src/main/java/org/apache/derbyBuild"
 
   doFirst {
     metaDir.mkdirs()
