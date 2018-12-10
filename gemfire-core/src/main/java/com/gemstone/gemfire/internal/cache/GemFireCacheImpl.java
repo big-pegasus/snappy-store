@@ -784,6 +784,7 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
   }
 
   class OldEntriesCleanerThread implements Runnable {
+    private static final long ENTRY_EXPIRATION_MS = 60000;
     // Keep each entry alive for at least 20 secs.
     public void run() {
       try {
@@ -794,6 +795,13 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
             if (region == null) continue;
             for (BlockingQueue<RegionEntry> oldEntriesQueue : regionEntryMap.values()) {
               for (RegionEntry re : oldEntriesQueue) {
+                // clean expired entries
+                // TODO: find the root cause
+                if (System.currentTimeMillis() - ENTRY_EXPIRATION_MS > re.getLastModified()) {
+                  oldEntriesQueue.remove(re);
+                  continue;
+                }
+
                 boolean entryFoundInTxState = false;
                 for (TXStateProxy txProxy : getTxManager().getHostedTransactionsInProgress()) {
                   TXState txState = txProxy.getLocalTXState();
