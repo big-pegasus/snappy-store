@@ -784,10 +784,12 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
   }
 
   class OldEntriesCleanerThread implements Runnable {
+    // Keep each entry alive for at most 60 secs.
     private static final long ENTRY_EXPIRATION_MS = 60000;
     // Keep each entry alive for at least 20 secs.
     public void run() {
       try {
+        long timestamp = System.currentTimeMillis();
         if (!oldEntryMap.isEmpty()) {
           for (Entry<String,Map<Object, BlockingQueue<RegionEntry>>> entry : oldEntryMap.entrySet()) {
             Map<Object, BlockingQueue<RegionEntry>> regionEntryMap = entry.getValue();
@@ -795,13 +797,6 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
             if (region == null) continue;
             for (BlockingQueue<RegionEntry> oldEntriesQueue : regionEntryMap.values()) {
               for (RegionEntry re : oldEntriesQueue) {
-                // clean expired entries
-                // TODO: find the root cause
-                if (System.currentTimeMillis() - ENTRY_EXPIRATION_MS > re.getLastModified()) {
-                  oldEntriesQueue.remove(re);
-                  continue;
-                }
-
                 boolean entryFoundInTxState = false;
                 for (TXStateProxy txProxy : getTxManager().getHostedTransactionsInProgress()) {
                   TXState txState = txProxy.getLocalTXState();
@@ -811,7 +806,10 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
                     break;
                   }
                 }
-                if (!entryFoundInTxState) {
+
+                // clean expired entries
+                // TODO: find the root cause
+                if (!entryFoundInTxState || timestamp - ENTRY_EXPIRATION_MS > re.getLastModified()) {
                   if (getLoggerI18n().fineEnabled()) {
                     getLoggerI18n().fine(
                         "OldEntriesCleanerThread : Removing the entry " + re + " entry update in progress : " +
