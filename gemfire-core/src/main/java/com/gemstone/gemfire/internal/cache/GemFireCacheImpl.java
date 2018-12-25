@@ -837,11 +837,11 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
 
   class OldEntriesCleanerThread implements Runnable {
     // Keep each entry alive for at least 20 secs.
-    static final int SUSPECT_QUEUE_LENGTH = 1000;
 
     public void run() {
       try {
         if (!oldEntryMap.isEmpty()) {
+          getLoggerI18n().info(LocalizedStrings.DEBUG,"oldEntryMap size: " + oldEntryMap.size());
           for (Entry<String,Map<Object, BlockingQueue<RegionEntry>>> entry : oldEntryMap.entrySet()) {
             Map<Object, BlockingQueue<RegionEntry>> regionEntryMap = entry.getValue();
             LocalRegion region = (LocalRegion)getRegion(entry.getKey());
@@ -857,25 +857,17 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
               Object key = oldEntry.getKey();
               BlockingQueue<RegionEntry> oldEntriesQueue = oldEntry.getValue();
 
-              boolean needTrace = false;
-              if (oldEntriesQueue.size() > SUSPECT_QUEUE_LENGTH) {
-                needTrace = true;
-                getLogger().warning("suspect oldEntriesQueue " + key + " length: " + oldEntriesQueue.size());
-              }
+              getLoggerI18n().warning(LocalizedStrings.DEBUG, "suspect oldEntriesQueue " + key + " length: " + oldEntriesQueue.size());
 
               for (RegionEntry re : oldEntriesQueue) {
                 // update in progress guards against the race where oldEntry and
                 // entry in region have same version for brief period
                 if (re.isUpdateInProgress()) {
-                  if (needTrace) {
-                    getLogger().warning("suspect oldEntriesQueue " + key + " is update in progress");
-                  }
+                  getLoggerI18n().warning(LocalizedStrings.DEBUG,"suspect oldEntriesQueue " + key + " is update in progress");
                   continue;
                 } else {
                   if (notRequiredByAnyTx(oldEntriesQueue, (LocalRegion)region, re)) {
-                    if (needTrace) {
-                      getLogger().warning("suspect oldEntriesQueue " + key + " will be free");
-                    }
+                    getLoggerI18n().warning(LocalizedStrings.DEBUG,"suspect oldEntriesQueue " + key + " will be free");
                     if (getLoggerI18n().fineEnabled()) {
                       getLoggerI18n().info(LocalizedStrings.DEBUG,
                           "OldEntriesCleanerThread : Removing the entry " + re );
