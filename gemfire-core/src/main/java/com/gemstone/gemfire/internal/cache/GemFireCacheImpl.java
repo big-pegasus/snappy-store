@@ -839,6 +839,7 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
     // Keep each entry alive for at least 20 secs.
 
     public void run() {
+      getLoggerI18n().info(LocalizedStrings.DEBUG,"OldEntriesCleanerThread start");
       try {
         if (!oldEntryMap.isEmpty()) {
           getLoggerI18n().info(LocalizedStrings.DEBUG,"oldEntryMap size: " + oldEntryMap.size());
