@@ -854,11 +854,12 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
                   " is " + regionEntryMap.size());
             }
 
+            getLoggerI18n().info(LocalizedStrings.DEBUG,"suspect regionEntryMap: " + entry.getKey() + " size:" + regionEntryMap.size() + " region:" + region);
             for (Entry<Object, BlockingQueue<RegionEntry>> oldEntry: regionEntryMap.entrySet()) {
               Object key = oldEntry.getKey();
               BlockingQueue<RegionEntry> oldEntriesQueue = oldEntry.getValue();
 
-              getLoggerI18n().warning(LocalizedStrings.DEBUG, "suspect oldEntriesQueue " + key + " length: " + oldEntriesQueue.size());
+              // getLoggerI18n().warning(LocalizedStrings.DEBUG, "suspect oldEntriesQueue " + key + " length: " + oldEntriesQueue.size());
 
               for (RegionEntry re : oldEntriesQueue) {
                 // update in progress guards against the race where oldEntry and
