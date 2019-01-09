@@ -865,7 +865,7 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
 
               for (RegionEntry re : oldEntriesQueue) {
                 // clean expired entries
-                boolean expired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL > re.getLastModified();
+                boolean expired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL*2 > re.getLastModified();
                 //getLoggerI18n().info(LocalizedStrings.DEBUG,"process entry:" + re + " expired:" + expired + " oldEntriesQueue:" + key + " lastModified:" + re.getLastModified());
                 // update in progress guards against the race where oldEntry and
                 // entry in region have same version for brief period
@@ -873,7 +873,7 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
                   getLoggerI18n().warning(LocalizedStrings.DEBUG,"entry:" + re + " is update in progress, oldEntriesQueue:" + key);
                   continue;
                 } else {
-                  if (expired || notRequiredByAnyTx(oldEntriesQueue, (LocalRegion)region, re)) {
+                  if (expired /* notRequiredByAnyTx(oldEntriesQueue, (LocalRegion)region, re) */) {
                     //getLoggerI18n().info(LocalizedStrings.DEBUG,"remove entry:" + re);
                     if (getLoggerI18n().fineEnabled()) {
                       getLoggerI18n().info(LocalizedStrings.DEBUG,
