@@ -838,6 +838,7 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
     public void run() {
       try {
         if (!oldEntryMap.isEmpty()) {
+          long timestamp = System.currentTimeMillis();
           // Can't do map.clear as have to account for memory for each oldEntry
           if (getTxManager().getHostedTransactionsInProgress().size() == 0) {
             acquireWriteLockOnSnapshotRvv();
@@ -849,24 +850,30 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
                 for (Entry<String, Map<Object, BlockingQueue<RegionEntry>>> entry : oldEntryMap.entrySet()) {
                   Map<Object, BlockingQueue<RegionEntry>> regionEntryMap = entry.getValue();
                   LocalRegion region = (LocalRegion)getRegion(entry.getKey());
-                  for (Entry<Object, BlockingQueue<RegionEntry>> oldEntry : regionEntryMap.entrySet()) {
-                    for (RegionEntry re : oldEntry.getValue()) {
-                      // also remove reference to region buffer, if any
-                      Object value = re._getValue();
-                      if (value instanceof SerializedDiskBuffer) {
-                        ((SerializedDiskBuffer)value).release();
-                      }
-//                      if (GemFireCacheImpl.hasNewOffHeap()) {
-//                        // also remove reference to region buffer, if any
-//                        Object value = re._getValue();
-//                        if (value instanceof SerializedDiskBuffer) {
-//                          ((SerializedDiskBuffer)value).release();
-//                        }
-//                      }
-                      // free the allocated memory
-                      if (!region.reservedTable() && region.needAccounting()) {
-                        NonLocalRegionEntry nre = (NonLocalRegionEntry)re;
-                        region.freePoolMemory(nre.getValueSize(), nre.isForDelete());
+                  if (region == null) continue;
+                  if (regionEntryMap.size() > 0) {
+                    getLoggerI18n().info(LocalizedStrings.DEBUG, "regionEntryMap: " + entry.getKey() + " size:" + regionEntryMap.size() + " region:" + region.getFullPath());
+                  }
+                  for (BlockingQueue<RegionEntry> oldEntriesQueue : regionEntryMap.values()) {
+                    for (RegionEntry re : oldEntriesQueue) {
+                      // clean expired entries
+                      boolean expired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL * 2 > re.getLastModified();
+                      if (expired) {
+                        // continue if some explicit call removed the entry
+                        if (!oldEntriesQueue.remove(re)) continue;
+                        // also remove reference to region buffer, if any
+                        if (GemFireCacheImpl.hasNewOffHeap()) {
+                          // also remove reference to region buffer, if any
+                          Object value = re._getValue();
+                          if (value instanceof SerializedDiskBuffer) {
+                            ((SerializedDiskBuffer) value).release();
+                          }
+                        }
+                        // free the allocated memory
+                        if (!region.reservedTable() && region.needAccounting()) {
+                          NonLocalRegionEntry nre = (NonLocalRegionEntry) re;
+                          region.freePoolMemory(nre.getValueSize(), nre.isForDelete());
+                        }
                       }
                     }
                   }
