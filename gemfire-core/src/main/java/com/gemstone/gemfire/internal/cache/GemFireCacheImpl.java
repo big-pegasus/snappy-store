@@ -836,55 +836,11 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
     // Keep each entry alive for at least 20 secs.
 
     public void run() {
+      getLoggerI18n().info(LocalizedStrings.DEBUG,"OldEntriesCleanerThread start");
       try {
+        long timestamp = System.currentTimeMillis();
         if (!oldEntryMap.isEmpty()) {
-          long timestamp = System.currentTimeMillis();
-          // Can't do map.clear as have to account for memory for each oldEntry
-          if (getTxManager().getHostedTransactionsInProgress().size() == 0) {
-            acquireWriteLockOnSnapshotRvv();
-            try {
-              if (getTxManager().getHostedTransactionsInProgress().size() == 0) {
-                if (getLoggerI18n().fineEnabled()) {
-                  getLoggerI18n().info(LocalizedStrings.DEBUG, "Clearing the Map");
-                }
-                for (Entry<String, Map<Object, BlockingQueue<RegionEntry>>> entry : oldEntryMap.entrySet()) {
-                  Map<Object, BlockingQueue<RegionEntry>> regionEntryMap = entry.getValue();
-                  LocalRegion region = (LocalRegion)getRegion(entry.getKey());
-                  if (region == null) continue;
-                  if (regionEntryMap.size() > 0) {
-                    getLoggerI18n().info(LocalizedStrings.DEBUG, "regionEntryMap: " + entry.getKey() + " size:" + regionEntryMap.size() + " region:" + region.getFullPath());
-                  }
-                  for (BlockingQueue<RegionEntry> oldEntriesQueue : regionEntryMap.values()) {
-                    for (RegionEntry re : oldEntriesQueue) {
-                      // clean expired entries
-                      boolean expired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL * 2 > re.getLastModified();
-                      if (expired) {
-                        // continue if some explicit call removed the entry
-                        if (!oldEntriesQueue.remove(re)) continue;
-                        // also remove reference to region buffer, if any
-                        if (GemFireCacheImpl.hasNewOffHeap()) {
-                          // also remove reference to region buffer, if any
-                          Object value = re._getValue();
-                          if (value instanceof SerializedDiskBuffer) {
-                            ((SerializedDiskBuffer) value).release();
-                          }
-                        }
-                        // free the allocated memory
-                        if (!region.reservedTable() && region.needAccounting()) {
-                          NonLocalRegionEntry nre = (NonLocalRegionEntry) re;
-                          region.freePoolMemory(nre.getValueSize(), nre.isForDelete());
-                        }
-                      }
-                    }
-                  }
-                }
-                return;
-              }
-            } finally {
-              releaseWriteLockOnSnapshotRvv();
-            }
-          }
-
+          getLoggerI18n().info(LocalizedStrings.DEBUG,"oldEntryMap size: " + oldEntryMap.size());
           for (Entry<String,Map<Object, BlockingQueue<RegionEntry>>> entry : oldEntryMap.entrySet()) {
             Map<Object, BlockingQueue<RegionEntry>> regionEntryMap = entry.getValue();
             LocalRegion region = (LocalRegion)getRegion(entry.getKey());
@@ -892,33 +848,42 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
 
             if (getLoggerI18n().fineEnabled()) {
               getLoggerI18n().info(LocalizedStrings.DEBUG, "The size of map for region " +
-                  region.getFullPath() +
-                  " is " + regionEntryMap.size());
+                      region.getFullPath() +
+                      " is " + regionEntryMap.size());
             }
-
+            if (regionEntryMap.size() > 0) {
+              getLoggerI18n().info(LocalizedStrings.DEBUG, "suspect regionEntryMap: " + entry.getKey() + " size:" + regionEntryMap.size() + " region:" + region.getFullPath());
+            }
             for (Entry<Object, BlockingQueue<RegionEntry>> oldEntry: regionEntryMap.entrySet()) {
               Object key = oldEntry.getKey();
               BlockingQueue<RegionEntry> oldEntriesQueue = oldEntry.getValue();
 
-              //getLoggerI18n().info(LocalizedStrings.DEBUG,
-              //    "OldEntriesCleanerThread : The queue size is " + oldEntriesQueue.size() );
+              // getLoggerI18n().warning(LocalizedStrings.DEBUG, "suspect oldEntriesQueue " + key + " length: " + oldEntriesQueue.size());
+
               for (RegionEntry re : oldEntriesQueue) {
+                // clean expired entries
+                boolean expired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL*2 > re.getLastModified();
+                //getLoggerI18n().info(LocalizedStrings.DEBUG,"process entry:" + re + " expired:" + expired + " oldEntriesQueue:" + key + " lastModified:" + re.getLastModified());
                 // update in progress guards against the race where oldEntry and
                 // entry in region have same version for brief period
                 if (re.isUpdateInProgress()) {
+                  getLoggerI18n().warning(LocalizedStrings.DEBUG,"entry:" + re + " is update in progress, oldEntriesQueue:" + key);
                   continue;
                 } else {
-                  if (notRequiredByAnyTx(oldEntriesQueue, (LocalRegion)region, re)) {
+                  if (expired /* notRequiredByAnyTx(oldEntriesQueue, (LocalRegion)region, re) */) {
+                    //getLoggerI18n().info(LocalizedStrings.DEBUG,"remove entry:" + re);
                     if (getLoggerI18n().fineEnabled()) {
                       getLoggerI18n().info(LocalizedStrings.DEBUG,
-                          "OldEntriesCleanerThread : Removing the entry " + re );
+                              "OldEntriesCleanerThread : Removing the entry " + re );
                     }
                     // continue if some explicit call removed the entry
                     if (!oldEntriesQueue.remove(re)) continue;
-                    // also remove reference to region buffer, if any
-                    Object value = re._getValue();
-                    if (value instanceof SerializedDiskBuffer) {
-                      ((SerializedDiskBuffer)value).release();
+                    if (GemFireCacheImpl.hasNewOffHeap()) {
+                      // also remove reference to region buffer, if any
+                      Object value = re._getValue();
+                      if (value instanceof SerializedDiskBuffer) {
+                        ((SerializedDiskBuffer)value).release();
+                      }
                     }
                     // free the allocated memory
                     if (!region.reservedTable() && region.needAccounting()) {
@@ -932,25 +897,25 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
           }
         }
 
-       synchronized (oldEntryMap) {
-        for (Map<Object, BlockingQueue<RegionEntry>> regionEntryMap : oldEntryMap.values()) {
-          for (Entry<Object, BlockingQueue<RegionEntry>> entry : regionEntryMap.entrySet()) {
-            if (entry.getValue().isEmpty()) {
-              regionEntryMap.remove(entry.getKey());
-              if (getLoggerI18n().fineEnabled()) {
-                getLoggerI18n().fine(
-                    "OldEntriesCleanerThread : Removing the map against the key " + entry.getKey());
+        synchronized (oldEntryMap) {
+          for (Map<Object, BlockingQueue<RegionEntry>> regionEntryMap : oldEntryMap.values()) {
+            for (Entry<Object, BlockingQueue<RegionEntry>> entry : regionEntryMap.entrySet()) {
+              if (entry.getValue().isEmpty()) {
+                regionEntryMap.remove(entry.getKey());
+                if (getLoggerI18n().fineEnabled()) {
+                  getLoggerI18n().fine(
+                          "OldEntriesCleanerThread : Removing the map against the key " + entry.getKey());
+                }
               }
             }
           }
         }
-       }
       }
       catch (Exception e) {
         if (getLoggerI18n().warningEnabled()) {
           getLoggerI18n().warning(LocalizedStrings.DEBUG,
-              "OldEntriesCleanerThread : Error occured while cleaning the oldentries map. Actual " +
-                  "Exception:", e);
+                  "OldEntriesCleanerThread : Error occured while cleaning the oldentries map. Actual " +
+                          "Exception:", e);
         }
       }
     }
