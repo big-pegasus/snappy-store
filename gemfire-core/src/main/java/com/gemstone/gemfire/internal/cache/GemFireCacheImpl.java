@@ -793,6 +793,9 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
             Map<Object, BlockingQueue<RegionEntry>> regionEntryMap = entry.getValue();
             LocalRegion region = (LocalRegion)getRegion(entry.getKey());
             if (region == null) continue;
+            if (regionEntryMap.size() > 0) {
+              getLoggerI18n().info(LocalizedStrings.DEBUG, "regionEntryMap: " + entry.getKey() + " size:" + regionEntryMap.size() + " region:" + region.getFullPath());
+            }
             for (BlockingQueue<RegionEntry> oldEntriesQueue : regionEntryMap.values()) {
               for (RegionEntry re : oldEntriesQueue) {
                 // clean expired entries
