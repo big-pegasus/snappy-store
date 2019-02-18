@@ -836,7 +836,7 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
     // Keep each entry alive for at least 20 secs.
 
     public void run() {
-      getLoggerI18n().info(LocalizedStrings.DEBUG,"OldEntriesCleanerThread start");
+      getLoggerI18n().info(LocalizedStrings.DEBUG,"OldEntriesCleanerThread start, hostedTXStates:" + getTxManager().getHostedTransactionsInProgress().size());
       try {
         long timestamp = System.currentTimeMillis();
         if (!oldEntryMap.isEmpty()) {
@@ -852,7 +852,8 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
                       " is " + regionEntryMap.size());
             }
             if (regionEntryMap.size() > 0) {
-              getLoggerI18n().info(LocalizedStrings.DEBUG, "suspect regionEntryMap: " + entry.getKey() + " size:" + regionEntryMap.size() + " region:" + region.getFullPath());
+              getLoggerI18n().info(LocalizedStrings.DEBUG, "suspect regionEntryMap: " + entry.getKey() +
+                      " size:" + regionEntryMap.size() + " region:" + region.getFullPath());
             }
             for (Entry<Object, BlockingQueue<RegionEntry>> oldEntry: regionEntryMap.entrySet()) {
               Object key = oldEntry.getKey();
@@ -872,6 +873,15 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
                 } else {
                   if (expired /* notRequiredByAnyTx(oldEntriesQueue, (LocalRegion)region, re) */) {
                     //getLoggerI18n().info(LocalizedStrings.DEBUG,"remove entry:" + re);
+                    // clean TXStates
+                    for (TXStateProxy txProxy : getTxManager().getHostedTransactionsInProgress()) {
+                      TXState txState = txProxy.getLocalTXState();
+                      if ((txState != null && !txState.isClosed() && TXState.checkEntryInSnapshot
+                              (txState, region, re))) {
+                        getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.TRUE);
+                      }
+                    }
+                    // clean entries
                     if (getLoggerI18n().fineEnabled()) {
                       getLoggerI18n().info(LocalizedStrings.DEBUG,
                               "OldEntriesCleanerThread : Removing the entry " + re );

@@ -316,10 +316,13 @@ public final class BucketAdvisor extends CacheDistributionAdvisor  {
   }
 
   boolean lockForMaintenance(boolean forWrite, long msecs, Object owner) {
+    getLogWriter().convertToLogWriter().info("[debug][enter] lockForMaintenance " + getProxyBucketRegion().getFullPath() + " forWrite=" + forWrite + " msecs:" + msecs);
     if (getPartitionedRegion().isInternalColumnTable()) {
       return getRowBuffer().getBucketAdvisor().lockForMaintenance(
           forWrite, msecs, owner);
     }
+
+    getLogWriter().convertToLogWriter().info("[debug][normal] enter lockForMaintenance " + getProxyBucketRegion().getFullPath() + " forWrite=" + forWrite + " msecs:" + msecs);
     boolean locked;
     if (forWrite) {
       locked = maintenanceLock.attemptLock(LockMode.EX, msecs, owner);
