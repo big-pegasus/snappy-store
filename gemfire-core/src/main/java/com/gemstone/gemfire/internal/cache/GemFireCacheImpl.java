@@ -836,7 +836,8 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
     // Keep each entry alive for at least 20 secs.
 
     public void run() {
-      getLoggerI18n().info(LocalizedStrings.DEBUG,"OldEntriesCleanerThread start, hostedTXStates:" + getTxManager().getHostedTransactionsInProgress().size());
+      getLoggerI18n().info(LocalizedStrings.DEBUG,"OldEntriesCleanerThread start, " +
+              "hostedTXStates:" + getTxManager().hostedTransactionsInProgressForTest());
       try {
         long timestamp = System.currentTimeMillis();
         if (!oldEntryMap.isEmpty()) {
@@ -876,9 +877,10 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
                     // clean TXStates
                     for (TXStateProxy txProxy : getTxManager().getHostedTransactionsInProgress()) {
                       TXState txState = txProxy.getLocalTXState();
-                      if ((txState != null && (!txState.isClosed() || TXState.checkEntryInSnapshot
+                      if ((txState != null && (txState.isClosed() || TXState.checkEntryInSnapshot
                               (txState, region, re)))) {
                         getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.TRUE);
+                        getTxManager().clearTXState();
                       }
                     }
                     // clean entries
