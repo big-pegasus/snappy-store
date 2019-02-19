@@ -880,7 +880,6 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
                       if ((txState != null && (txState.isClosed() || TXState.checkEntryInSnapshot
                               (txState, region, re)))) {
                         getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.TRUE);
-                        getTxManager().clearTXState();
                       }
                     }
                     // clean entries
