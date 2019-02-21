@@ -856,6 +856,22 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
               getLoggerI18n().info(LocalizedStrings.DEBUG, "suspect regionEntryMap: " + entry.getKey() +
                       " size:" + regionEntryMap.size() + " region:" + region.getFullPath());
             }
+
+            // clean TXStates
+            for (TXStateProxy txProxy: getTxManager().getHostedTransactionsInProgress()) {
+              TXState txState = txProxy.getLocalTXState();
+              boolean txStateExpired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL*2 > txState.getBeginTime();
+              if (txState != null) {
+                if (txState.isClosed()) {
+                  // clean the closed transaction for speeding up
+                  getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.TRUE);
+                } else if (txStateExpired) {
+                  // clean and fail the expired transaction
+                  getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.FALSE);
+                }
+              }
+            }
+
             for (Entry<Object, BlockingQueue<RegionEntry>> oldEntry: regionEntryMap.entrySet()) {
               Object key = oldEntry.getKey();
               BlockingQueue<RegionEntry> oldEntriesQueue = oldEntry.getValue();
@@ -869,19 +885,24 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
                 // update in progress guards against the race where oldEntry and
                 // entry in region have same version for brief period
                 if (re.isUpdateInProgress()) {
-                  getLoggerI18n().warning(LocalizedStrings.DEBUG,"entry:" + re + " is update in progress, oldEntriesQueue:" + key);
                   continue;
                 } else {
                   if (expired /* notRequiredByAnyTx(oldEntriesQueue, (LocalRegion)region, re) */) {
-                    //getLoggerI18n().info(LocalizedStrings.DEBUG,"remove entry:" + re);
                     // clean TXStates
+                    boolean inProcess = false;
                     for (TXStateProxy txProxy : getTxManager().getHostedTransactionsInProgress()) {
                       TXState txState = txProxy.getLocalTXState();
-                      if ((txState != null && (txState.isClosed() || TXState.checkEntryInSnapshot
-                              (txState, region, re)))) {
-                        getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.TRUE);
+                      if ((txState != null && TXState.checkEntryInSnapshot(txState, region, re))) {
+                          inProcess = true;
+                        break;
                       }
                     }
+
+                    // As reference count is not 0, we cannot remove this entry.
+                    if (inProcess) {
+                      continue;
+                    }
+
                     // clean entries
                     if (getLoggerI18n().fineEnabled()) {
                       getLoggerI18n().info(LocalizedStrings.DEBUG,
