@@ -178,6 +178,8 @@ import com.gemstone.gemfire.pdx.internal.TypeRegistry;
 import com.gemstone.gnu.trove.THashSet;
 import io.snappydata.collection.ObjectObjectHashMap;
 
+import static com.gemstone.gemfire.internal.NanoTimer.nanosToMillis;
+
 // @todo somebody Come up with more reasonable values for {@link #DEFAULT_LOCK_TIMEOUT}, etc.
 /**
  * GemFire's implementation of a distributed {@link com.gemstone.gemfire.cache.Cache}.
@@ -861,12 +863,15 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
             for (TXStateProxy txProxy: getTxManager().getHostedTransactionsInProgress()) {
               TXState txState = txProxy.getLocalTXState();
               if (txState != null) {
-                boolean txStateExpired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL*2 > txState.getBeginTime();
+                boolean txStateExpired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL*2 > nanosToMillis(txState.getBeginTime());
                 if (txState.isClosed()) {
                   // clean the closed transaction for speeding up
                   getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.TRUE);
-                } else if (txStateExpired) {
+                } else if (txStateExpired && txState.getBeginTime() != 0) {
+                  // if CachePerfStats.enableClockStats set to false, disable txState expiration.
                   // clean and fail the expired transaction
+                  getLoggerI18n().info(LocalizedStrings.DEBUG, "TX: " + txState +
+                          " expired, span: " + (timestamp - nanosToMillis(txState.getBeginTime())) + "ms");
                   getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.FALSE);
                 }
               }
