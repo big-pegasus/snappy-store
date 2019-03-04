@@ -193,6 +193,11 @@ public final class TXState implements TXStateInterface {
   private final AtomicBoolean txLocked;
 
   /**
+   * timestamp for expiration
+   */
+  public long timestamp = 0;
+
+  /**
    * Denotes the state of this TXState.
    */
   static enum State {
