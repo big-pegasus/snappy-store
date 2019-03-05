@@ -871,10 +871,6 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
                       region.getFullPath() +
                       " is " + regionEntryMap.size());
             }
-            if (regionEntryMap.size() > 0) {
-              getLoggerI18n().info(LocalizedStrings.DEBUG, "suspect regionEntryMap: " + entry.getKey() +
-                      " size:" + regionEntryMap.size() + " region:" + region.getFullPath());
-            }
 
             for (Entry<Object, BlockingQueue<RegionEntry>> oldEntry: regionEntryMap.entrySet()) {
               Object key = oldEntry.getKey();
