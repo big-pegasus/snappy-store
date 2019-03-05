@@ -844,6 +844,23 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
         long timestamp = System.currentTimeMillis();
         if (!oldEntryMap.isEmpty()) {
           getLoggerI18n().info(LocalizedStrings.DEBUG,"oldEntryMap size: " + oldEntryMap.size());
+          // clean TXStates
+          for (TXStateProxy txProxy: getTxManager().getHostedTransactionsInProgress()) {
+            TXState txState = txProxy.getLocalTXState();
+            if (txState != null) {
+              if (txState.timestamp == 0) {
+                txState.timestamp = timestamp;
+                continue;
+              }
+
+              boolean txStateExpired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL > txState.timestamp;
+              if (txStateExpired && txState.isClosed()) {
+                // clean the closed transaction for speeding up
+                getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.TRUE);
+              }
+            }
+          }
+
           for (Entry<String,Map<Object, BlockingQueue<RegionEntry>>> entry : oldEntryMap.entrySet()) {
             Map<Object, BlockingQueue<RegionEntry>> regionEntryMap = entry.getValue();
             LocalRegion region = (LocalRegion)getRegion(entry.getKey());
@@ -857,23 +874,6 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
             if (regionEntryMap.size() > 0) {
               getLoggerI18n().info(LocalizedStrings.DEBUG, "suspect regionEntryMap: " + entry.getKey() +
                       " size:" + regionEntryMap.size() + " region:" + region.getFullPath());
-            }
-
-            // clean TXStates
-            for (TXStateProxy txProxy: getTxManager().getHostedTransactionsInProgress()) {
-              TXState txState = txProxy.getLocalTXState();
-              if (txState != null) {
-                if (txState.timestamp == 0) {
-                  txState.timestamp = timestamp;
-                  continue;
-                }
-
-                boolean txStateExpired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL > txState.timestamp;
-                if (txStateExpired && txState.isClosed()) {
-                  // clean the closed transaction for speeding up
-                  getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.TRUE);
-                }
-              }
             }
 
             for (Entry<Object, BlockingQueue<RegionEntry>> oldEntry: regionEntryMap.entrySet()) {
