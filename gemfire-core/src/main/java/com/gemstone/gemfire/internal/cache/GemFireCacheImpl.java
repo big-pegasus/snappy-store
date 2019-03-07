@@ -848,7 +848,8 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
           for (TXStateProxy txProxy: getTxManager().getHostedTransactionsInProgress()) {
             TXState txState = txProxy.getLocalTXState();
             if (txState != null) {
-              if (txState.timestamp == 0) {
+              getLoggerI18n().info(LocalizedStrings.DEBUG, "suspected txState = " + txState);
+              /*if (txState.timestamp == 0) {
                 txState.timestamp = timestamp;
                 continue;
               }
@@ -857,7 +858,8 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
               if (txStateExpired && txState.isClosed()) {
                 // clean the closed transaction for speeding up
                 getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.TRUE);
-              }
+                txState.unlockTXRSAndTXState();
+              }*/
             }
           }
 
