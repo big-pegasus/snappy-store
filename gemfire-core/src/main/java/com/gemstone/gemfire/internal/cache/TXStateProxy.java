@@ -1369,7 +1369,7 @@ public class TXStateProxy extends NonReentrantReadWriteLock implements
     // nothing by default
   }
 
-  private final void signalLocalTXCommit() {
+  protected final void signalLocalTXCommit() {
     // the choice to not take the lock before checking the flag is a
     // deliberate one; in the worst case TXStateProxy#waitForLocalTXCommit
     // will end up waiting for sometime unnecessarily
