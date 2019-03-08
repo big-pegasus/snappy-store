@@ -854,11 +854,11 @@ public class GemFireCacheImpl implements InternalCache, ClientCache, HasCachePer
                 continue;
               }
 
-              boolean txStateExpired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL > txState.timestamp;
-              if (txStateExpired && txState.isClosed()) {
+              boolean txStateExpired = timestamp - OLD_ENTRIES_CLEANER_TIME_INTERVAL*2 > txState.timestamp;
+              if (txStateExpired && txState.state == TXState.State.OPEN) {
                 // clean the closed transaction for speeding up
-                getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.TRUE);
                 txProxy.cleanup(false);
+                getTxManager().removeHostedTXState(txProxy.getTransactionId(), Boolean.TRUE);
                 txProxy.signalLocalTXCommit();
               }
             }
